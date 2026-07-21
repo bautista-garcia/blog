@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 560 180" font-family="'Segoe Print', 'Bradley Hand', cursive">
+  <!-- Placeholder exported-style diagram. Replace with a real Excalidraw export. -->
+  <rect x="20" y="60" width="130" height="60" rx="4" fill="none" stroke="#1c1c1a" stroke-width="2"/>
+  <text x="85" y="95" text-anchor="middle" font-size="18" fill="#1c1c1a">weights</text>
+  <line x1="155" y1="90" x2="225" y2="90" stroke="#1c1c1a" stroke-width="2"/>
+  <polygon points="225,84 240,90 225,96" fill="#1c1c1a"/>
+  <rect x="245" y="55" width="140" height="70" rx="4" fill="none" stroke="#8a2a1b" stroke-width="2"/>
+  <text x="315" y="85" text-anchor="middle" font-size="18" fill="#8a2a1b">GEMV</text>
+  <text x="315" y="105" text-anchor="middle" font-size="18" fill="#8a2a1b">kernel</text>
+  <line x1="390" y1="90" x2="460" y2="90" stroke="#1c1c1a" stroke-width="2"/>
+  <polygon points="460,84 475,90 460,96" fill="#1c1c1a"/>
+  <rect x="480" y="60" width="60" height="60" rx="4" fill="none" stroke="#1c1c1a" stroke-width="2"/>
+  <text x="510" y="95" text-anchor="middle" font-size="18" fill="#1c1c1a">y</text>
+</svg>

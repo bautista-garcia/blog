@@ -1,0 +1,435 @@
+/* ------------------------------------------------------------------
+   Design tokens
+   ------------------------------------------------------------------ */
+:root {
+  --paper: #fcfcf9; /* near-white, barely warm */
+  --ink: #1c1c1a;
+  --muted: #6f6f68;
+  --accent: #8a2a1b; /* oxblood — links only */
+  --rule: #e3e3dc; /* hairlines */
+  --measure: 38rem; /* text column */
+  --rail: 13.5rem; /* sidenote column */
+  --gutter: 3rem;
+  --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--serif);
+  font-size: 1.15rem;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ------------------------------------------------------------------
+   Skeleton: one centered block; text column left-aligned inside it so
+   the right side is free for marginalia on wide screens.
+   ------------------------------------------------------------------ */
+.site-header,
+main,
+.site-footer {
+  max-width: 57rem;
+  margin-inline: auto;
+  padding-inline: 1.25rem;
+}
+
+main {
+  padding-bottom: 4rem;
+}
+
+/* ------------------------------------------------------------------
+   Header / nav
+   ------------------------------------------------------------------ */
+.site-header nav {
+  display: flex;
+  gap: 1.5rem;
+  align-items: baseline;
+  padding-block: 1.4rem;
+  border-bottom: 1px solid var(--rule);
+}
+
+.site-name,
+.intro h1 {
+  font-variant-caps: small-caps;
+  letter-spacing: 0.06em;
+}
+
+.site-name {
+  font-size: 1.25rem;
+}
+
+/* ------------------------------------------------------------------
+   Links
+   ------------------------------------------------------------------ */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------
+   Type
+   ------------------------------------------------------------------ */
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  font-weight: 600;
+}
+
+.intro h1 {
+  font-size: 2.1rem;
+  margin: 2.5rem 0 0.75rem;
+  font-weight: 500;
+}
+
+.intro p {
+  margin: 0 0 1rem;
+  max-width: var(--measure);
+}
+
+/* Utility text: dates, tags, labels — small letterspaced sans,
+   the deliberate counterpoint to the serif body. */
+.meta {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+}
+
+.meta a {
+  color: var(--muted);
+}
+
+.meta a:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+/* ------------------------------------------------------------------
+   Home: post list with the marginalia date rail (signature element)
+   ------------------------------------------------------------------ */
+.post-list {
+  list-style: none;
+  margin: 1.5rem 0 0;
+  padding: 0;
+}
+
+.post-item {
+  border-top: 1px solid var(--rule);
+  padding-block: 1.6rem;
+}
+
+.post-item:last-child {
+  border-bottom: 1px solid var(--rule);
+}
+
+.post-item .meta {
+  margin-bottom: 0.4rem;
+}
+
+.post-item .meta time,
+.post-item .meta .tags {
+  display: block;
+}
+
+.post-item .meta .tags a + a::before {
+  content: '· ';
+}
+
+.post-summary h2 {
+  font-size: 1.45rem;
+  margin: 0 0 0.5rem;
+}
+
+.post-summary h2 a {
+  color: var(--ink);
+}
+
+.post-summary h2 a:hover {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.post-summary p {
+  margin: 0;
+  max-width: var(--measure);
+}
+
+.draft-badge {
+  font-family: var(--sans);
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--paper);
+  background: var(--muted);
+  border-radius: 2px;
+  padding: 0.1em 0.45em;
+  margin-left: 0.6em;
+  vertical-align: 0.2em;
+}
+
+/* Wide screens: date + tags sit in a left rail, like marginalia. */
+@media (min-width: 1200px) {
+  .post-item {
+    display: grid;
+    grid-template-columns: 8.5rem minmax(0, var(--measure));
+    column-gap: 2.5rem;
+  }
+
+  .post-item .meta {
+    margin-top: 0.5rem;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Post page
+   ------------------------------------------------------------------ */
+.prose {
+  max-width: var(--measure);
+  counter-reset: sidenote;
+}
+
+.post-header {
+  margin: 2.5rem 0 2rem;
+}
+
+.post-header h1 {
+  font-size: 2rem;
+  margin: 0 0 0.6rem;
+}
+
+.prose > p,
+.prose > ul,
+.prose > ol {
+  margin: 0 0 1.4rem;
+}
+
+.prose h2 {
+  font-size: 1.5rem;
+  margin: 2.6rem 0 1rem;
+}
+
+.prose h3 {
+  font-size: 1.25rem;
+  margin: 2.2rem 0 0.8rem;
+}
+
+.prose ul,
+.prose ol {
+  padding-left: 1.4rem;
+}
+
+.prose li {
+  margin-bottom: 0.4rem;
+}
+
+.prose blockquote {
+  margin: 0 0 1.4rem;
+  padding-left: 1.2rem;
+  border-left: 2px solid var(--rule);
+  color: #44443f;
+}
+
+.prose hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2.5rem 0;
+}
+
+.prose img {
+  display: block;
+  margin: 0 auto 1.4rem;
+  max-width: 100%;
+  height: auto;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.88em;
+}
+
+.prose pre {
+  clear: both;
+  overflow-x: auto;
+  padding: 1.1rem 1.25rem;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  margin: 0 0 1.4rem;
+  font-size: 0.85rem;
+  line-height: 1.55;
+}
+
+.prose pre code {
+  font-size: inherit;
+}
+
+/* Wide screens: code blocks claim the margin rail, Tufte "full width" style. */
+@media (min-width: 1200px) {
+  .prose pre {
+    width: calc(100% + var(--rail) + var(--gutter));
+  }
+}
+
+/* ------------------------------------------------------------------
+   Math (KaTeX)
+   ------------------------------------------------------------------ */
+.katex {
+  font-size: 1.06em;
+}
+
+.katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.25rem;
+  margin: 0 0 1.4rem;
+}
+
+/* ------------------------------------------------------------------
+   Sidenotes
+   Numbered by CSS counter; the label carries the superscript, the
+   hidden checkbox drives the mobile tap-to-expand.
+   ------------------------------------------------------------------ */
+.sidenote-toggle.sidenote-number {
+  counter-increment: sidenote;
+  cursor: pointer;
+}
+
+.sidenote-number::after {
+  content: counter(sidenote);
+  vertical-align: super;
+  font-size: 0.72em;
+  margin-left: 0.1em;
+}
+
+input.sidenote-toggle {
+  display: none;
+}
+
+.sidenote {
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.sidenote::before {
+  content: counter(sidenote) ' ';
+  vertical-align: super;
+  font-size: 0.72em;
+  margin-right: 0.15em;
+}
+
+@media (min-width: 1200px) {
+  .sidenote {
+    float: right;
+    clear: right;
+    width: var(--rail);
+    margin-right: calc(-1 * (var(--rail) + var(--gutter)));
+    margin-bottom: 1rem;
+    color: #44443f;
+  }
+}
+
+@media (max-width: 1199.98px) {
+  .sidenote {
+    display: none;
+  }
+
+  input.sidenote-toggle:checked + .sidenote {
+    display: block;
+    float: left;
+    clear: both;
+    width: 100%;
+    margin: 0.9rem 0;
+    padding-left: 1rem;
+    border-left: 2px solid var(--rule);
+    color: #44443f;
+  }
+}
+
+/* ------------------------------------------------------------------
+   Tags pages
+   ------------------------------------------------------------------ */
+.tag-list {
+  list-style: none;
+  padding: 0;
+  margin: 2rem 0 0;
+}
+
+.tag-list li {
+  padding-block: 0.7rem;
+  border-top: 1px solid var(--rule);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  max-width: var(--measure);
+}
+
+.tag-list .count {
+  font-family: var(--sans);
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------------
+   Footer
+   ------------------------------------------------------------------ */
+.site-footer {
+  padding-bottom: 2.5rem;
+}
+
+.site-footer hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 0 0 1.2rem;
+}
+
+.site-footer p {
+  font-family: var(--sans);
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin: 0;
+  display: flex;
+  gap: 1.2rem;
+}
+
+/* ------------------------------------------------------------------
+   Small screens
+   ------------------------------------------------------------------ */
+@media (max-width: 640px) {
+  body {
+    font-size: 1.05rem;
+  }
+
+  .intro h1 {
+    font-size: 1.8rem;
+  }
+
+  .post-header h1 {
+    font-size: 1.65rem;
+  }
+}

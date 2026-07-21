@@ -1,0 +1,511 @@
+---
+import '../../styles/global.css';
+import { site } from '../../site.config';
+import { href } from '../../lib/url';
+
+const base = import.meta.env.BASE_URL;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex, nofollow" />
+    <title>Editor · {site.name}</title>
+    <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+  </head>
+  <body class="editor-body">
+    <div
+      id="editor"
+      data-owner={site.repo.owner}
+      data-repo={site.repo.name}
+      data-branch={site.repo.branch}
+      data-base={base}
+    >
+      <!-- Auth gate -->
+      <section id="gate" hidden>
+        <h1>Blog editor</h1>
+        <p>
+          The editor commits straight to the GitHub repo — saving a post (or
+          uploading an image) is a commit, and the site rebuilds from it.
+        </p>
+        <p>
+          Create a token at
+          <a href="https://github.com/settings/tokens?type=beta" target="_blank" rel="noopener">
+            github.com/settings/tokens</a>
+          (fine-grained, this repo only, <em>Contents: read and write</em>) or a classic token
+          with <em>repo</em> scope. It’s stored only in this browser.
+        </p>
+        <label>Repo owner <input id="gate-owner" autocomplete="off" /></label>
+        <label>Repo name <input id="gate-repo" autocomplete="off" /></label>
+        <label>Token <input id="gate-token" type="password" autocomplete="off" /></label>
+        <button id="gate-save" class="primary">Connect</button>
+        <p id="gate-error" class="error"></p>
+      </section>
+
+      <!-- App -->
+      <div id="app" hidden>
+        <header id="topbar">
+          <strong>Editor</strong>
+          <span id="status"></span>
+          <span class="spacer"></span>
+          <button id="btn-preview">Preview</button>
+          <button id="btn-save" class="primary">Save</button>
+          <button id="btn-forget" title="Forget the stored token">Log out</button>
+        </header>
+
+        <div id="main">
+          <aside id="sidebar">
+            <div class="side-head">
+              <button id="btn-new" class="primary">+ New post</button>
+              <button id="btn-refresh" title="Reload from GitHub">↻</button>
+            </div>
+            <ul id="post-list"></ul>
+          </aside>
+
+          <section id="workspace">
+            <div id="fields">
+              <input id="f-title" placeholder="Post title" autocomplete="off" />
+              <div class="row">
+                <label>Slug <input id="f-slug" autocomplete="off" /></label>
+                <label>Date <input id="f-date" type="date" /></label>
+                <label>Tags <input id="f-tags" placeholder="comma, separated" autocomplete="off" /></label>
+                <label class="chk"><input id="f-draft" type="checkbox" /> Draft</label>
+              </div>
+            </div>
+
+            <div id="toolbar">
+              <button data-tb="bold" title="Bold"><b>B</b></button>
+              <button data-tb="italic" title="Italic"><i>I</i></button>
+              <button data-tb="h2" title="Heading">H2</button>
+              <button data-tb="link" title="Link">Link</button>
+              <button data-tb="icode" title="Inline code">`code`</button>
+              <button data-tb="codeblock" title="Fenced code block">Code block</button>
+              <button data-tb="math" title="Math — inline for short selections, display otherwise">∑ Math</button>
+              <button data-tb="sidenote" title="Sidenote in the margin">Sidenote</button>
+              <button data-tb="image" title="Upload and insert an image">Image…</button>
+              <button data-tb="diagram" title="Upload an Excalidraw SVG">Diagram…</button>
+              <span class="spacer"></span>
+              <button id="btn-delete" class="danger" hidden>Delete</button>
+            </div>
+
+            <div id="panes">
+              <textarea id="body" placeholder="Write Markdown… paste or drop images here." spellcheck="false"></textarea>
+              <div id="preview" class="prose" hidden></div>
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <!-- Upload modal -->
+      <div id="modal" hidden>
+        <div class="modal-card">
+          <h2 id="modal-title">Insert image</h2>
+          <p id="modal-hint"></p>
+          <a id="modal-excalidraw" href="https://excalidraw.com" target="_blank" rel="noopener" hidden>
+            Open excalidraw.com ↗
+          </a>
+          <div id="drop">Drop the file here, or <label class="filebtn">browse<input id="m-file" type="file" accept="image/*,.svg" hidden /></label></div>
+          <div id="m-preview"></div>
+          <div class="row">
+            <label>Alt text <input id="m-alt" autocomplete="off" /></label>
+            <label>Width px <input id="m-width" type="number" min="50" placeholder="empty = column width" /></label>
+          </div>
+          <div class="row end">
+            <button id="m-cancel">Cancel</button>
+            <button id="m-insert" class="primary" disabled>Upload &amp; insert</button>
+          </div>
+          <p id="m-error" class="error"></p>
+        </div>
+      </div>
+    </div>
+
+    <style>
+      [hidden] {
+        display: none !important;
+      }
+
+      .editor-body {
+        margin: 0;
+        background: var(--paper);
+      }
+
+      #editor {
+        font-family: var(--sans);
+        font-size: 0.9rem;
+        color: var(--ink);
+        min-height: 100vh;
+        display: flex;
+        flex-direction: column;
+      }
+
+      #editor button {
+        font: inherit;
+        padding: 0.3rem 0.7rem;
+        border: 1px solid var(--rule);
+        border-radius: 4px;
+        background: var(--paper);
+        color: var(--ink);
+        cursor: pointer;
+      }
+
+      #editor button:hover {
+        border-color: var(--muted);
+      }
+
+      #editor button.primary {
+        background: var(--ink);
+        border-color: var(--ink);
+        color: var(--paper);
+      }
+
+      #editor button.danger {
+        color: var(--accent);
+        border-color: var(--accent);
+      }
+
+      #editor input[type='text'],
+      #editor input:not([type]),
+      #editor input[type='date'],
+      #editor input[type='number'],
+      #editor input[type='password'] {
+        font: inherit;
+        padding: 0.35rem 0.5rem;
+        border: 1px solid var(--rule);
+        border-radius: 4px;
+        background: #fff;
+        color: var(--ink);
+        width: 100%;
+      }
+
+      .spacer {
+        flex: 1;
+      }
+
+      .error {
+        color: var(--accent);
+      }
+
+      .muted {
+        color: var(--muted);
+        list-style: none;
+        padding: 0.5rem 0.75rem;
+      }
+
+      /* ---- Gate ---- */
+      #gate {
+        max-width: 24rem;
+        margin: 8vh auto;
+        padding: 0 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.9rem;
+      }
+
+      #gate h1 {
+        font-family: var(--serif);
+        font-variant-caps: small-caps;
+        letter-spacing: 0.06em;
+        font-weight: 500;
+        margin: 0;
+      }
+
+      #gate p {
+        margin: 0;
+        line-height: 1.5;
+        color: #44443f;
+      }
+
+      #gate label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.25rem;
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+
+      /* ---- Top bar ---- */
+      #topbar {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+        padding: 0.55rem 1rem;
+        border-bottom: 1px solid var(--rule);
+        background: var(--paper);
+        position: sticky;
+        top: 0;
+        z-index: 10;
+      }
+
+      #status:empty {
+        display: none;
+      }
+
+      #status {
+        font-size: 0.8rem;
+        color: var(--muted);
+      }
+
+      #status.error {
+        color: var(--accent);
+      }
+
+      /* ---- Layout ---- */
+      #app {
+        display: flex;
+        flex-direction: column;
+        flex: 1;
+        min-height: 0;
+      }
+
+      #main {
+        display: grid;
+        grid-template-columns: 240px 1fr;
+        flex: 1;
+        min-height: 0;
+      }
+
+      #sidebar {
+        border-right: 1px solid var(--rule);
+        overflow-y: auto;
+      }
+
+      .side-head {
+        display: flex;
+        gap: 0.4rem;
+        padding: 0.6rem;
+        border-bottom: 1px solid var(--rule);
+        position: sticky;
+        top: 0;
+        background: var(--paper);
+      }
+
+      .side-head #btn-new {
+        flex: 1;
+      }
+
+      #post-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+
+      .post-item {
+        display: block;
+        width: 100%;
+        text-align: left;
+        border: 0 !important;
+        border-radius: 0 !important;
+        border-bottom: 1px solid var(--rule) !important;
+        padding: 0.55rem 0.75rem !important;
+      }
+
+      .post-item.active {
+        background: #f0efe8 !important;
+      }
+
+      .post-item .t {
+        display: block;
+        font-family: var(--serif);
+        font-size: 0.95rem;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .post-item .f {
+        display: block;
+        font-size: 0.7rem;
+        color: var(--muted);
+      }
+
+      /* ---- Workspace ---- */
+      #workspace {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+
+      #fields {
+        padding: 0.75rem 1rem 0;
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      #f-title {
+        font-family: var(--serif);
+        font-size: 1.3rem;
+        font-weight: 600;
+      }
+
+      #fields .row,
+      .modal-card .row {
+        display: flex;
+        gap: 0.75rem;
+        align-items: end;
+      }
+
+      #fields label,
+      .modal-card label {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2rem;
+        font-size: 0.68rem;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        flex: 1;
+      }
+
+      label.chk {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 0.4rem !important;
+        flex: 0 0 auto !important;
+        padding-bottom: 0.5rem;
+      }
+
+      #toolbar {
+        display: flex;
+        gap: 0.35rem;
+        align-items: center;
+        padding: 0.6rem 1rem;
+        border-bottom: 1px solid var(--rule);
+        flex-wrap: wrap;
+      }
+
+      #panes {
+        display: grid;
+        grid-template-columns: 1fr;
+        flex: 1;
+        min-height: 0;
+      }
+
+      #panes.split {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      #body {
+        font-family: var(--mono);
+        font-size: 0.88rem;
+        line-height: 1.6;
+        border: 0;
+        resize: none;
+        padding: 1rem 1.25rem;
+        outline: none;
+        background: transparent;
+        color: var(--ink);
+        min-height: 55vh;
+      }
+
+      #preview {
+        overflow-y: auto;
+        padding: 0.5rem 1.25rem 2rem;
+        border-left: 1px solid var(--rule);
+        font-size: 1rem;
+      }
+
+      .pv-sn {
+        font-size: 0.8em;
+        color: var(--muted);
+        border-left: 2px solid var(--rule);
+        padding-left: 0.5em;
+        margin-left: 0.2em;
+      }
+
+      /* ---- Modal ---- */
+      #modal {
+        position: fixed;
+        inset: 0;
+        background: rgba(28, 28, 26, 0.35);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 50;
+      }
+
+      .modal-card {
+        background: var(--paper);
+        border: 1px solid var(--rule);
+        border-radius: 8px;
+        padding: 1.25rem;
+        width: min(30rem, calc(100vw - 2rem));
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+      }
+
+      .modal-card h2 {
+        font-family: var(--serif);
+        margin: 0;
+        font-size: 1.3rem;
+      }
+
+      .modal-card p {
+        margin: 0;
+        color: #44443f;
+      }
+
+      #drop {
+        border: 2px dashed var(--rule);
+        border-radius: 6px;
+        padding: 1.6rem;
+        text-align: center;
+        color: var(--muted);
+      }
+
+      .filebtn {
+        color: var(--accent);
+        cursor: pointer;
+        text-decoration: underline;
+      }
+
+      #m-preview img {
+        max-width: 100%;
+        max-height: 12rem;
+        display: block;
+        margin: 0 auto;
+        border: 1px solid var(--rule);
+      }
+
+      .row.end {
+        justify-content: flex-end;
+      }
+
+      /* ---- Small screens ---- */
+      @media (max-width: 900px) {
+        #main {
+          grid-template-columns: 1fr;
+        }
+
+        #sidebar {
+          border-right: 0;
+          border-bottom: 1px solid var(--rule);
+          max-height: 30vh;
+        }
+
+        #panes.split {
+          grid-template-columns: 1fr;
+        }
+
+        #preview {
+          border-left: 0;
+          border-top: 1px solid var(--rule);
+        }
+
+        #fields .row {
+          flex-wrap: wrap;
+        }
+      }
+    </style>
+
+    <script>
+      import '../../editor/app.js';
+    </script>
+  </body>
+</html>

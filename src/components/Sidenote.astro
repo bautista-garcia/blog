@@ -1,0 +1,21 @@
+---
+import { nextSidenoteId } from '../lib/sidenote';
+
+/**
+ * Tufte-style sidenote for MDX posts.
+ * Wide screens: floats in the right margin, numbered automatically.
+ * Small screens: hidden until the reader taps the superscript number.
+ *
+ * Usage inside a paragraph of an .mdx post:
+ *   Some claim worth qualifying<Sidenote>The qualification, which would
+ *   otherwise live in a footnote at the bottom of the page.</Sidenote> and
+ *   the sentence continues.
+ */
+const id = nextSidenoteId();
+---
+
+<label for={id} class="sidenote-toggle sidenote-number"></label><input
+  type="checkbox"
+  id={id}
+  class="sidenote-toggle"
+/><span class="sidenote"><slot /></span>
