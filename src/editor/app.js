@@ -200,6 +200,48 @@ function renderPreview() {
     })
     .join('');
   previewEl.innerHTML = html;
+  hydratePreviewImages();
+}
+
+/* ------------------------------------------------------------------ *
+ * Preview images: repo files can't be reached from the editor (private
+ * repo, or not pulled locally), so fetch them via the API as data URLs.
+ * Handles both editor uploads ({base}assets/…) and pipeline images
+ * (../../assets/…).
+ * ------------------------------------------------------------------ */
+const imgCache = new Map(); // repo path -> data URL
+const MIME = {
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  avif: 'image/avif',
+};
+
+async function hydratePreviewImages() {
+  for (const img of previewEl.querySelectorAll('img')) {
+    const src = img.getAttribute('src') || '';
+    let path = null;
+    if (src.startsWith(`${BASE}assets/`)) path = `public/${src.slice(BASE.length)}`;
+    else if (src.startsWith('../../assets/')) path = `src/${src.slice('../../'.length)}`;
+    if (!path) continue;
+    const cached = imgCache.get(path);
+    if (cached) {
+      img.src = cached;
+      continue;
+    }
+    try {
+      const file = await client.getFile(path);
+      const mime = MIME[path.split('.').pop().toLowerCase()] || 'application/octet-stream';
+      const url = `data:${mime};base64,${file.content.replace(/\n/g, '')}`;
+      imgCache.set(path, url);
+      img.src = url;
+    } catch {
+      /* not in the repo — leave the src as-is */
+    }
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -348,6 +390,7 @@ async function deletePost() {
  * ------------------------------------------------------------------ */
 const modalEl = $('modal');
 const mFile = $('m-file');
+const mName = $('m-name');
 const mAlt = $('m-alt');
 const mWidth = $('m-width');
 const mInsert = $('m-insert');
@@ -363,6 +406,7 @@ function openModal(kind, file = null) {
       : 'PNG, JPG, GIF, WebP or SVG.';
   $('modal-excalidraw').hidden = kind !== 'diagrams';
   mFile.value = '';
+  mName.value = '';
   mAlt.value = '';
   mWidth.value = '';
   mError.textContent = '';
@@ -378,9 +422,16 @@ function closeModal() {
 }
 
 function setModalFile(file) {
+  const isImage = file.type.startsWith('image/');
+  const isSvg = /\.svg$/i.test(file.name) || file.type === 'image/svg+xml';
+  if (!isImage && !isSvg) {
+    mError.textContent = 'Only image or SVG files.';
+    return;
+  }
   modal.file = file;
   mInsert.disabled = false;
   mError.textContent = '';
+  mName.value = sanitizeFilename(file.name);
   if (!mAlt.value) mAlt.value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
   mPreview.innerHTML = '';
   const img = document.createElement('img');
@@ -393,7 +444,13 @@ async function doInsert() {
   mInsert.disabled = true;
   mError.textContent = 'Uploading…';
   try {
-    const name = sanitizeFilename(modal.file.name);
+    let name = sanitizeFilename(mName.value.trim() || modal.file.name);
+    if (!/\.[a-z0-9]+$/i.test(name)) {
+      const ext =
+        modal.file.name.match(/\.[a-z0-9]+$/i)?.[0] ||
+        (modal.file.type === 'image/svg+xml' ? '.svg' : '.png');
+      name += ext;
+    }
     const path = `public/assets/${modal.kind}/${name}`;
     const b64 = await fileToBase64(modal.file);
     let sha;
@@ -403,7 +460,7 @@ async function doInsert() {
     await client.putFile(path, b64, `Add ${modal.kind.slice(0, -1)}: ${name}`, sha);
     const width = mWidth.value ? ` width="${Number(mWidth.value)}"` : '';
     const alt = mAlt.value.trim().replace(/"/g, '&quot;');
-    insertBlock(`<img src="${BASE}assets/${modal.kind}/${name}" alt="${alt}"${width}>`);
+    insertBlock(`<img src="${BASE}assets/${modal.kind}/${name}" alt="${alt}"${width} />`);
     setStatus('Uploaded ✓');
     closeModal();
   } catch (e) {
@@ -497,6 +554,15 @@ bodyEl.addEventListener('paste', (e) => {
   if (f) {
     e.preventDefault();
     openModal(/\.svg$/i.test(f.name) ? 'diagrams' : 'images', f);
+    return;
+  }
+  // Excalidraw's "copy SVG to clipboard" puts SVG markup on the clipboard as text.
+  const text = e.clipboardData?.getData('text/plain') || '';
+  if (/^\s*<svg[\s>]/i.test(text) && text.includes('</svg>')) {
+    e.preventDefault();
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+    const file = new File([text], `diagram-${stamp}.svg`, { type: 'image/svg+xml' });
+    openModal('diagrams', file);
   }
 });
 bodyEl.addEventListener('dragover', (e) => e.preventDefault());

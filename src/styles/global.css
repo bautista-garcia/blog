@@ -289,10 +289,10 @@ code {
   font-size: inherit;
 }
 
-/* Wide screens: code blocks claim the margin rail, Tufte "full width" style. */
+/* Wide screens: code blocks claim most of the margin rail. */
 @media (min-width: 1200px) {
   .prose pre {
-    width: calc(100% + var(--rail) + var(--gutter));
+    width: calc(100% + (var(--rail) + var(--gutter)) * 0.75);
   }
 }
 
