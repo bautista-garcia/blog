@@ -267,6 +267,35 @@ h3 {
   margin: 0 auto 1.4rem;
   max-width: 100%;
   height: auto;
+  cursor: zoom-in;
+}
+
+/* ------------------------------------------------------------------
+   Lightbox (click an image/diagram to zoom)
+   ------------------------------------------------------------------ */
+.lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  margin: 0;
+  padding: 2rem;
+  box-sizing: border-box;
+  background: rgba(28, 28, 26, 0.88);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  cursor: zoom-out;
+}
+
+.lightbox img {
+  max-width: 95vw;
+  max-height: 95vh;
+  height: auto;
+  margin: auto;
+  background: var(--paper); /* transparent SVGs stay readable */
+  border-radius: 4px;
+  box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
 }
 
 code {

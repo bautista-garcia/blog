@@ -574,11 +574,18 @@ bodyEl.addEventListener('drop', (e) => {
   }
 });
 
-// Keyboard: Cmd/Ctrl+S saves.
+// Keyboard: Cmd/Ctrl+S saves; Cmd/Ctrl+B / Cmd/Ctrl+I format in the textarea.
 document.addEventListener('keydown', (e) => {
-  if ((e.metaKey || e.ctrlKey) && e.key === 's' && !app.hidden) {
+  if (!(e.metaKey || e.ctrlKey) || app.hidden) return;
+  if (e.key === 's') {
     e.preventDefault();
     save();
+  } else if (e.target === bodyEl && e.key === 'b') {
+    e.preventDefault();
+    toolbarActions.bold();
+  } else if (e.target === bodyEl && e.key === 'i') {
+    e.preventDefault();
+    toolbarActions.italic();
   }
 });
 

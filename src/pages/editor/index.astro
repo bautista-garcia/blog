@@ -76,8 +76,8 @@ const base = import.meta.env.BASE_URL;
             </div>
 
             <div id="toolbar">
-              <button data-tb="bold" title="Bold"><b>B</b></button>
-              <button data-tb="italic" title="Italic"><i>I</i></button>
+              <button data-tb="bold" title="Bold (⌘B)"><b>B</b></button>
+              <button data-tb="italic" title="Italic (⌘I)"><i>I</i></button>
               <button data-tb="h2" title="Heading">H2</button>
               <button data-tb="link" title="Link">Link</button>
               <button data-tb="icode" title="Inline code">`code`</button>
@@ -240,6 +240,8 @@ const base = import.meta.env.BASE_URL;
         align-items: center;
         gap: 0.6rem;
         padding: 0.55rem 1rem;
+        height: 3rem;
+        box-sizing: border-box;
         border-bottom: 1px solid var(--rule);
         background: var(--paper);
         position: sticky;
@@ -384,6 +386,10 @@ const base = import.meta.env.BASE_URL;
         padding: 0.6rem 1rem;
         border-bottom: 1px solid var(--rule);
         flex-wrap: wrap;
+        position: sticky;
+        top: 3rem;
+        z-index: 9;
+        background: var(--paper);
       }
 
       #panes {
@@ -524,6 +530,7 @@ const base = import.meta.env.BASE_URL;
 
     <script>
       import '../../editor/app.js';
+      import '../../lib/lightbox.js';
     </script>
   </body>
 </html>
