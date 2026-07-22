@@ -98,7 +98,32 @@ When loading a 2 byte portion of the $q_i$ array from the weight block, you get 
 You only perform the correcting shift at the end of the $\sum_{i=0}^{7}x_i \ w_i$  accumulation.
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-15-32.svg" alt="diagram 2026 07 22 15 32" />
+The following code shows that, each $acc_i$ is responsible for a pair of groups (i.e: G1 and G2 for Team A) and you can see how the accumulation is done without the shifts (only masking the corresponding weights). 
 
+```c++
+            for (ushort i = 0; i < 4; ++i) { 
+                // q1 for the first 64 bytes and q2 for the second 64 bytes
+                acc1[0] += yl[2 * i] * float(q1[i] & 0x000f);
+                acc1[1] += yl[2 * i + 1] * float(q1[i] & 0x0f00);
+                acc1[2] += yl[2 * i + 8] * float(q1[i] & 0x00f0);
+                acc1[3] += yl[2 * i + 9] * float(q1[i] & 0xf000);
+                acc2[0] += yh[2 * i] * float(q2[i] & 0x000f);
+                acc2[1] += yh[2 * i + 1] * float(q2[i] & 0x0f00);
+                acc2[2] += yh[2 * i + 8] * float(q2[i] & 0x00f0);
+                acc2[3] += yh[2 * i + 9] * float(q2[i] & 0xf000);
+            }
+```
+When results are reduced we apply the corresponding shifts and multiply each term of the expresion by its corresponding group minimums and scales, as well as the global ones (`dh`). 
+<Sidenote>The `dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]))` performs $\sum_{g}m_gX_g$ for the four groups each lane contributes to.</Sidenote>
 
+```c++
+            sumf[row] += float(dh[0]) * ((acc1[0] + acc1[1] / 256.0f) * sc8[0] +
+                                         (acc1[2] + acc1[3] / 256.0f) * sc8[1] / 16.0f +
+                                         (acc2[0] + acc2[1] / 256.0f) * sc8[4] +
+                                         (acc2[2] + acc2[3] / 256.0f) * sc8[5] / 16.0f) -
+                         float(dh[1]) * dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]));
 
+```
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-19-33.svg" alt="diagram 2026 07 22 19 33" />
 
