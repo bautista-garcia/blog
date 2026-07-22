@@ -56,6 +56,7 @@ The way these teams are organized have its purpose in the way the scales and min
 Because we process each group (32 weights) in teams of 4 lanes, each lane will "own" a contiguous portion of 8 weights from each group that the team owns.
 <img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
 
+<Sidenote>Each lane also owns its corresponding $x_i$ so that it can perform its partial dot product (i.e: L0 owns $q_0 .. q..7$ & $x_0..x_7$.</Sidenote>
 
 ### Compute
 Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. The following is the expression of the compute needed to get the partial output (corresponding to a single tile)
@@ -87,8 +88,17 @@ d\sum_{g=0}^{7}s_gQ_g
 d_m\sum_{g=0}^{7}m_gX_g.
 \end{aligned}
 $$
+<Sidenote>A dequantized weight is $w_i = d\,s_g\,q_i-d_m\,m_g$ and the full dot product + dequant is $\sum_{i=0}^{256}x_i \ w_i$</Sidenote>
+The main work for each lane is calculating $X_g$ & $Q_g$ for the corresponding 8 weight portion of each group it owns. Because activations are all stored in FP16, calculating $X_g$ is very straightforward, you load the corresponding portion and you reduce them. However, when computing $Q_g$ you have to account for the shifts each $q_i$ has because of how they are stored.
 
-As 
+<img src="/blog/assets/diagrams/diagram-2026-07-22-15-26.svg" alt="diagram 2026 07 22 15 26" />
+
+When loading a 2 byte portion of the $q_i$ array from the weight block, you get four 4 weights, where three of them are shifted (4, 8 and 12 slots). Because these shifts are the same for all the quants loaded by a lane.
+<Sidenote>Give an example</Sidenote>
+You only perform the correcting shift at the end of the $\sum_{i=0}^{7}x_i \ w_i$  accumulation.
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-15-32.svg" alt="diagram 2026 07 22 15 32" />
+
 
 
 
