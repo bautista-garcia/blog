@@ -1,0 +1,46 @@
+---
+title: Writing a high performant GEMV + dequant for Metal
+date: 2026-07-21
+tags: [kernels, llm, qwen3.5]
+draft: false
+---
+import Sidenote from '../../components/Sidenote.astro';
+
+
+## What is a GEMV
+
+A GEMV is one of the most common operations in LLMs, during the decode phase, each forward pass executes this operation hundreds of times. On a modern architecture like Qwen 3.5, each **Decoder layer** (regardless of GDN or FullAttention) has many projections (Q, K & V as an example) as well as MLPs processing big shapes. This GEMV is a simple matrix vector product (the difference with the GEMM is that the activations vector is one dimensional).
+
+$$x . W^T$$
+<Sidenote>$x: (1, K)$ and $W: (M, K)$</Sidenote>
+
+Because this ends up taking almost most of the execution time of each forward pass on decode, it is important to have high performant GEMV kernels to achieve the highest possible decode/generation tps (tokens per second).
+
+## Dequantization
+In order to run bigger models on computers with lower amount of memory, models are quantized, so that each weight takes less amount of memory. There are metrics such as perplexity, which measures the overall degradation in generative prediction confidence across a text corpus, or KL divergence, which directly quantifies token-by-token probability distribution drift between the original and quantized outputs.
+
+### UD-Q4_K_XL
+There are many ways to quantize a model, some methods use the same quant type for all the layers in the model (i.e: FP8 or NVFP4), while other quantization models introduce a mixed quantization schema, where it uses a specific quant type for each different layer of the model. The UD-Q4_K_XL is a method introduced by Unsloth, specific for the Qwen3.5 series of models. It contains **Q4_K, Q5_K, Q6_K, Q8_0 & IQ4_XS** all across the model. *[Quantization methods](https://medium.com/@paul.ilvez/demystifying-llm-quantization-suffixes-what-q4-k-m-q8-0-and-q6-k-really-mean-0ec2770f17d3)*
+
+## Fusing GEMV and Dequantization
+*The specific case I will be talking about is the fused Q4_K + GEMV, Q5_K and Q6_k are very similar (they only changes some scale and minimum storage) and Q8_0 doesn't require dequantization, so it is similar to a performant GEMV.*
+
+### What is a weight block?
+<img src="/blog/assets/diagrams/diagram-2026-07-21-23-58.svg" alt="diagram 2026 07 21 23 58" />
+We talked about how weights have a shape of $(M, K)$. Each weight block represents $256$ weights and these are divided into 8 groups of 32, which share the same scales and minimums. Below is how you dequant a weigth using global ($d$) and group (`s[g]` and `m[g]`) scales & minimums
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-00-02.svg" alt="diagram 2026 07 22 00 02" />
+
+These weight blocks span out across the $K$ dimension of the weight tensor, meaning that we have a total of $N * K/256$ weight blocks, for each layer's tensor, these weight blocks can be processed in parallel and later be reduced if we tile across this K dimension.
+
+### SIMD & Threadgroups map to data
+Inside metal's backend a SIMD (NVIDIA warp) is a group of 32 lanes (NVIDIA threads) executing instructions with a SIMD control mechanism. For this strategy each SIMD will own a $(1, 1024)$ tile of the activation vector $x$ and a $(2, 1024)$ tile of the weights vector (transposed), producing a partial $(1,2)$ result of the output vector. 
+<img src="/blog/assets/diagrams/diagram-2026-07-22-00-13.svg" alt="diagram 2026 07 22 00 13" />
+There will also be a further logical division which is dividing the 32 lanes in 4 groups of 8 called "cohorts", each of these cohorts processes two full quant weight blocks (one from each column of $W^T$).
+
+After tuning to get the best results, I found 64 lanes (2 SIMDs) per threadgroup, to be the best configuration possible. These SIMDs are scheduled to the same GPU core (NVIDIA SMs) so that they can share the threadgroup memory and synchronize using barriers, so tuning the amount of SIMDs per GPU core will determine the occupancy: many SIMDs inside a threadgroup may not fit in the register file, reducing occupancy, while low SIMDs may not be enough to hide latency when one SIMD is executing a memory operation (context switching to hide latency).
+
+### Lanes mapping to data
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
+
