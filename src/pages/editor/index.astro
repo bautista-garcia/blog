@@ -142,7 +142,8 @@ const base = import.meta.env.BASE_URL;
         font-family: var(--sans);
         font-size: 0.9rem;
         color: var(--ink);
-        min-height: 100vh;
+        height: 100vh;
+        overflow: hidden;
         display: flex;
         flex-direction: column;
       }
@@ -273,6 +274,7 @@ const base = import.meta.env.BASE_URL;
       #main {
         display: grid;
         grid-template-columns: 240px 1fr;
+        grid-template-rows: minmax(0, 1fr);
         flex: 1;
         min-height: 0;
       }
@@ -280,6 +282,7 @@ const base = import.meta.env.BASE_URL;
       #sidebar {
         border-right: 1px solid var(--rule);
         overflow-y: auto;
+        min-height: 0;
       }
 
       .side-head {
@@ -395,6 +398,7 @@ const base = import.meta.env.BASE_URL;
       #panes {
         display: grid;
         grid-template-columns: 1fr;
+        grid-template-rows: minmax(0, 1fr);
         flex: 1;
         min-height: 0;
       }
@@ -413,7 +417,7 @@ const base = import.meta.env.BASE_URL;
         outline: none;
         background: transparent;
         color: var(--ink);
-        min-height: 55vh;
+        min-height: 0;
       }
 
       #preview {
@@ -503,6 +507,12 @@ const base = import.meta.env.BASE_URL;
 
       /* ---- Small screens ---- */
       @media (max-width: 900px) {
+        /* Back to natural page scroll on small screens. */
+        #editor {
+          height: auto;
+          overflow: visible;
+        }
+
         #main {
           grid-template-columns: 1fr;
         }
