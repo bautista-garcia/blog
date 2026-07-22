@@ -51,7 +51,12 @@ Each of the cohorts is logically subdivided into "teams" of 4 lanes, where each 
 The way these teams are organized have its purpose in the way the scales and minimums for each group are stored. By loading two contiguous bytes of local scales & minimums, each team ends up owning the groups showed above.
 <Sidenote>All 4 lanes LOAD these local scales and minimums from GMEM to REG</Sidenote>
 
-<img src="/blog/assets/diagrams/diagram-2026-07-22-13-22.svg" alt="diagram 2026 07 22 13 22" />
+
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-19-48.svg" alt="diagram 2026 07 22 19 48" />
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-19-48.svg" alt="diagram 2026 07 22 19 48" />
+
 
 Because we process each group (32 weights) in teams of 4 lanes, each lane will "own" a contiguous portion of 8 weights from each group that the team owns.
 <img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
@@ -101,29 +106,37 @@ You only perform the correcting shift at the end of the $\sum_{i=0}^{7}x_i \ w_i
 The following code shows that, each $acc_i$ is responsible for a pair of groups (i.e: G1 and G2 for Team A) and you can see how the accumulation is done without the shifts (only masking the corresponding weights). 
 
 ```c++
-            for (ushort i = 0; i < 4; ++i) { 
-                // q1 for the first 64 bytes and q2 for the second 64 bytes
-                acc1[0] += yl[2 * i] * float(q1[i] & 0x000f);
-                acc1[1] += yl[2 * i + 1] * float(q1[i] & 0x0f00);
-                acc1[2] += yl[2 * i + 8] * float(q1[i] & 0x00f0);
-                acc1[3] += yl[2 * i + 9] * float(q1[i] & 0xf000);
-                acc2[0] += yh[2 * i] * float(q2[i] & 0x000f);
-                acc2[1] += yh[2 * i + 1] * float(q2[i] & 0x0f00);
-                acc2[2] += yh[2 * i + 8] * float(q2[i] & 0x00f0);
-                acc2[3] += yh[2 * i + 9] * float(q2[i] & 0xf000);
-            }
+for (ushort i = 0; i < 4; ++i) { 
+    // q1 for the first 64 bytes and q2 for the second 64 bytes
+    acc1[0] += yl[2 * i] * float(q1[i] & 0x000f);
+    acc1[1] += yl[2 * i + 1] * float(q1[i] & 0x0f00);
+    acc1[2] += yl[2 * i + 8] * float(q1[i] & 0x00f0);
+    acc1[3] += yl[2 * i + 9] * float(q1[i] & 0xf000);
+    acc2[0] += yh[2 * i] * float(q2[i] & 0x000f);
+    acc2[1] += yh[2 * i + 1] * float(q2[i] & 0x0f00);
+    acc2[2] += yh[2 * i + 8] * float(q2[i] & 0x00f0);
+    acc2[3] += yh[2 * i + 9] * float(q2[i] & 0xf000);
+}
 ```
+<Sidenote>We load weights using two ushort loaders (`q1 and q2`), combined they load 8 weights per iteration (see diagram above for one loader), in 4 iterations they load the 32 weights each lane is responsible of (8 from each of the groups that team owns.</Sidenote>
+
 When results are reduced we apply the corresponding shifts and multiply each term of the expresion by its corresponding group minimums and scales, as well as the global ones (`dh`). 
 <Sidenote>The `dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]))` performs $\sum_{g}m_gX_g$ for the four groups each lane contributes to.</Sidenote>
 
 ```c++
-            sumf[row] += float(dh[0]) * ((acc1[0] + acc1[1] / 256.0f) * sc8[0] +
-                                         (acc1[2] + acc1[3] / 256.0f) * sc8[1] / 16.0f +
-                                         (acc2[0] + acc2[1] / 256.0f) * sc8[4] +
-                                         (acc2[2] + acc2[3] / 256.0f) * sc8[5] / 16.0f) -
-                         float(dh[1]) * dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]));
+sumf[row] += float(dh[0]) * ((acc1[0] + acc1[1] / 256.0f) * sc8[0] +
+                             (acc1[2] + acc1[3] / 256.0f) * sc8[1] / 16.0f +
+                             (acc2[0] + acc2[1] / 256.0f) * sc8[4] +
+                             (acc2[2] + acc2[3] / 256.0f) * sc8[5] / 16.0f) -
+             float(dh[1]) * dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]));
 
 ```
-
+Below is a diagram that visually shows the contributions made by a single team with regards to a weight block. *The other does the same with groups (G3, G4, G7 and G8).*
 <img src="/blog/assets/diagrams/diagram-2026-07-22-19-33.svg" alt="diagram 2026 07 22 19 33" />
+
+Noting that the group and team separation is just made for dequantization purposes. In the end when we have the partials of each team, each group and each weight block, those are all sum reduced because they belong to the same output tile. 
+`float sum = simd_sum(sumf[row]);`
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-00-13.svg" alt="diagram 2026 07 22 00 13" />
+
 
