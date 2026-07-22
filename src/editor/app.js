@@ -580,6 +580,40 @@ bodyEl.addEventListener('drop', (e) => {
   }
 });
 
+// Tab / Shift+Tab: indent or unindent. With a selection, every line it
+// touches is shifted; with just a cursor, Tab inserts two spaces and
+// Shift+Tab removes up to two from the start of the current line.
+const INDENT = '  ';
+
+bodyEl.addEventListener('keydown', (e) => {
+  if (e.key !== 'Tab') return;
+  e.preventDefault();
+  const { selectionStart: s, selectionEnd: end, value } = bodyEl;
+  const lineStart = value.lastIndexOf('\n', s - 1) + 1;
+  const block = value.slice(lineStart, end);
+
+  if (e.shiftKey) {
+    const unindented = block.replace(/^ {1,2}/gm, '');
+    bodyEl.value = value.slice(0, lineStart) + unindented + value.slice(end);
+    if (s === end) {
+      const removed = block.length - unindented.length;
+      const pos = Math.max(lineStart, s - removed);
+      bodyEl.setSelectionRange(pos, pos);
+    } else {
+      bodyEl.setSelectionRange(lineStart, lineStart + unindented.length);
+    }
+  } else if (s === end) {
+    bodyEl.value = value.slice(0, s) + INDENT + value.slice(end);
+    bodyEl.setSelectionRange(s + INDENT.length, s + INDENT.length);
+  } else {
+    const indented = block.replace(/^/gm, INDENT);
+    bodyEl.value = value.slice(0, lineStart) + indented + value.slice(end);
+    bodyEl.setSelectionRange(lineStart, lineStart + indented.length);
+  }
+  markDirty();
+  schedulePreview();
+});
+
 // Keyboard: Cmd/Ctrl+S saves; Cmd/Ctrl+B / Cmd/Ctrl+I format in the textarea.
 document.addEventListener('keydown', (e) => {
   if (!(e.metaKey || e.ctrlKey) || app.hidden) return;
