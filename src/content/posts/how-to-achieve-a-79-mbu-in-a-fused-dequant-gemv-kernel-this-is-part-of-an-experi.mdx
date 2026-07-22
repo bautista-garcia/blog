@@ -58,29 +58,37 @@ Because we process each group (32 weights) in teams of 4 lanes, each lane will "
 
 
 ### Compute
-Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. There is a trick which saves us compute, which consists of doing the dequantization for the whole group. Since global scales & min are shared, those can be factored out of the dot + dequant, the same happends with group scales & min at the group level.
+Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. The following is the expression of the compute needed to get the partial output (corresponding to a single tile)
 $$
 \begin{aligned}
-w_i
-&= d\,s_{g(i)}\,q_i - d_m\,m_{g(i)},
-&& g(i)=\left\lfloor \frac{i}{32}\right\rfloor,
-\\[4pt]
-y_{\mathrm{block}}
-&= \sum_{i=0}^{255} x_i w_i
-\\[4pt]
-&= \sum_{i=0}^{255}
-x_i\left(d\,s_{g(i)}\,q_i-d_m\,m_{g(i)}\right),
-\\[8pt]
 p_g
-&= \sum_{i=32g}^{32g+31} x_i w_i,
-&& g\in\{0,\ldots,7\},
+&=
+\sum_{i=32g}^{32g+31}
+x_i\left(d\,s_g\,q_i-d_m\,m_g\right)
 \\[4pt]
+&=
+d\,s_g
+\underbrace{\sum_{i=32g}^{32g+31}x_iq_i}_{Q_g}
+-
+d_m\,m_g
+\underbrace{\sum_{i=32g}^{32g+31}x_i}_{X_g},
+\\[8pt]
 y_{\mathrm{block}}
-&= \sum_{g=0}^{7}p_g.
+&=
+\sum_{g=0}^{7}p_g
+\\[4pt]
+&=
+\sum_{g=0}^{7}
+\left(d\,s_g\,Q_g-d_m\,m_g\,X_g\right)
+\\[4pt]
+&=
+d\sum_{g=0}^{7}s_gQ_g
+-
+d_m\sum_{g=0}^{7}m_gX_g.
 \end{aligned}
 $$
 
-
+As 
 
 
 
