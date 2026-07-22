@@ -184,21 +184,27 @@ function schedulePreview() {
 function renderPreview() {
   let src = bodyEl.value.replace(/^import .*$/gm, '');
   src = src.replace(/<Sidenote>([\s\S]*?)<\/Sidenote>/g, (_, n) => `<span class="pv-sn">${n}</span>`);
-  let html = marked.parse(src);
-  // Render math outside of code blocks only.
-  html = html
-    .split(/(<pre[\s\S]*?<\/pre>)/)
-    .map((part, i) => {
-      if (i % 2 === 1) return part; // inside <pre>
-      return part
-        .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) =>
-          katex.renderToString(m, { displayMode: true, throwOnError: false }),
-        )
-        .replace(/\$([^$\n]+?)\$/g, (_, m) =>
-          katex.renderToString(m, { displayMode: false, throwOnError: false }),
-        );
-    })
+
+  // Extract math BEFORE marked runs, otherwise Markdown mangles formulas
+  // (e.g. underscores in x_tile become <em>). Fenced code blocks are left
+  // untouched. Rendered KaTeX is substituted back into the HTML at the end.
+  const math = [];
+  const stash = (source, displayMode) => {
+    math.push(katex.renderToString(source, { displayMode, throwOnError: false }));
+    return `XQMATHX${math.length - 1}XQ`;
+  };
+  const extractMath = (s) =>
+    s
+      .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => stash(m, true))
+      .replace(/\$([^$\n]+?)\$/g, (_, m) => stash(m, false));
+
+  const processed = src
+    .split(/(```[\s\S]*?```)/)
+    .map((part, i) => (i % 2 === 1 ? part : extractMath(part)))
     .join('');
+
+  let html = marked.parse(processed);
+  html = html.replace(/XQMATHX(\d+)XQ/g, (_, i) => math[Number(i)]);
   previewEl.innerHTML = html;
   hydratePreviewImages();
 }
