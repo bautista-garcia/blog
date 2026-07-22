@@ -270,6 +270,23 @@ h3 {
   cursor: zoom-in;
 }
 
+/* Figures: image + caption ("legend") */
+.prose figure {
+  margin: 0 0 1.4rem;
+}
+
+.prose figure img {
+  margin-bottom: 0.5rem;
+}
+
+.prose figcaption {
+  font-family: var(--sans);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--muted);
+  text-align: center;
+}
+
 /* ------------------------------------------------------------------
    Lightbox (click an image/diagram to zoom)
    ------------------------------------------------------------------ */

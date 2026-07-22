@@ -398,6 +398,7 @@ const modalEl = $('modal');
 const mFile = $('m-file');
 const mName = $('m-name');
 const mAlt = $('m-alt');
+const mCaption = $('m-caption');
 const mWidth = $('m-width');
 const mInsert = $('m-insert');
 const mError = $('m-error');
@@ -414,6 +415,7 @@ function openModal(kind, file = null) {
   mFile.value = '';
   mName.value = '';
   mAlt.value = '';
+  mCaption.value = '';
   mWidth.value = '';
   mError.textContent = '';
   mPreview.innerHTML = '';
@@ -466,7 +468,13 @@ async function doInsert() {
     await client.putFile(path, b64, `Add ${modal.kind.slice(0, -1)}: ${name}`, sha);
     const width = mWidth.value ? ` width="${Number(mWidth.value)}"` : '';
     const alt = mAlt.value.trim().replace(/"/g, '&quot;');
-    insertBlock(`<img src="${BASE}assets/${modal.kind}/${name}" alt="${alt}"${width} />`);
+    const caption = mCaption.value
+      .trim()
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    const imgTag = `<img src="${BASE}assets/${modal.kind}/${name}" alt="${alt}"${width} />`;
+    insertBlock(caption ? `<figure>\n${imgTag}\n<figcaption>${caption}</figcaption>\n</figure>` : imgTag);
     setStatus('Uploaded ✓');
     closeModal();
   } catch (e) {
