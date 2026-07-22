@@ -41,6 +41,10 @@ There will also be a further logical division which is dividing the 32 lanes in 
 After tuning to get the best results, I found 64 lanes (2 SIMDs) per threadgroup, to be the best configuration possible. These SIMDs are scheduled to the same GPU core (NVIDIA SMs) so that they can share the threadgroup memory and synchronize using barriers, so tuning the amount of SIMDs per GPU core will determine the occupancy: many SIMDs inside a threadgroup may not fit in the register file, reducing occupancy, while low SIMDs may not be enough to hide latency when one SIMD is executing a memory operation (context switching to hide latency).
 
 ### Lanes mapping to data
-
+<Sidenote> The analysis will be simplified to a single block per cohort, because processing the second block (from the next $W^T$ column) is the same processing with different indexing (done in a for loop)</Sidenote>
 <img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
+
+Each of the cohorts is logically subdivided into "teams" of 4 lanes, where each of them processes 4 of the 8 groups that make a weight block.
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-13-14.svg" alt="diagram 2026 07 22 13 14" />
 
