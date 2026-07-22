@@ -40,11 +40,47 @@ There will also be a further logical division which is dividing the 32 lanes in 
 
 After tuning to get the best results, I found 64 lanes (2 SIMDs) per threadgroup, to be the best configuration possible. These SIMDs are scheduled to the same GPU core (NVIDIA SMs) so that they can share the threadgroup memory and synchronize using barriers, so tuning the amount of SIMDs per GPU core will determine the occupancy: many SIMDs inside a threadgroup may not fit in the register file, reducing occupancy, while low SIMDs may not be enough to hide latency when one SIMD is executing a memory operation (context switching to hide latency).
 
-### Lanes mapping to data
+### Lanes map to data
 <Sidenote> The analysis will be simplified to a single block per cohort, because processing the second block (from the next $W^T$ column) is the same processing with different indexing (done in a for loop)</Sidenote>
-<img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
+
 
 Each of the cohorts is logically subdivided into "teams" of 4 lanes, where each of them processes 4 of the 8 groups that make a weight block.
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-13-14.svg" alt="diagram 2026 07 22 13 14" />
+
+The way these teams are organized have its purpose in the way the scales and minimums for each group are stored. By loading two contiguous bytes of local scales & minimums, each team ends up owning the groups showed above.
+<Sidenote>All 4 lanes LOAD these local scales and minimums from GMEM to REG</Sidenote>
+
+<img src="/blog/assets/diagrams/diagram-2026-07-22-13-22.svg" alt="diagram 2026 07 22 13 22" />
+
+Because we process each group (32 weights) in teams of 4 lanes, each lane will "own" a contiguous portion of 8 weights from each group that the team owns.
+<img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
+
+
+### Compute
+Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. There is a trick which saves us compute, which consists of doing the dequantization for the whole group. Since global scales & min are shared, those can be factored out of the dot + dequant, the same happends with group scales & min at the group level.
+$$
+\begin{aligned}
+w_i
+&= d\,s_{g(i)}\,q_i - d_m\,m_{g(i)},
+&& g(i)=\left\lfloor \frac{i}{32}\right\rfloor,
+\\[4pt]
+y_{\mathrm{block}}
+&= \sum_{i=0}^{255} x_i w_i
+\\[4pt]
+&= \sum_{i=0}^{255}
+x_i\left(d\,s_{g(i)}\,q_i-d_m\,m_{g(i)}\right),
+\\[8pt]
+p_g
+&= \sum_{i=32g}^{32g+31} x_i w_i,
+&& g\in\{0,\ldots,7\},
+\\[4pt]
+y_{\mathrm{block}}
+&= \sum_{g=0}^{7}p_g.
+\end{aligned}
+$$
+
+
+
+
 
