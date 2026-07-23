@@ -105,7 +105,7 @@ The main work for each lane is calculating $X_g$ & $Q_g$ for the corresponding 8
 <img src="/blog/assets/diagrams/diagram-2026-07-22-15-26.svg" alt="diagram 2026 07 22 15 26" />
 
 When loading a 2 byte portion of the $q_i$ array from the weight block, you get four 4 weights, where three of them are shifted (4, 8 and 12 slots). Because these shifts are the same for all the quants loaded by a lane.
-<Sidenote>i.e: In the first iteration of the loading you load $q_1 << 8$ (equivalent to $q_1 * 2^8$), in the next iteration you load $q_4 * 2^8$. Instead of correcting each shift you do the shifted acumulation and correct in the end (save redudndant shifts) $((q_1 * 2^8) x_1 + (q_4 * 2^8) x_4) * \frac{1}{2^8}$</Sidenote>
+<Sidenote>i.e: In the first iteration of the loading you load $q_1 << 8$ (equivalent to $q_1 * 2^8$), in the next iteration you load $q_4 * 2^8$. Instead of correcting each shift you do the shifted acumulation and correct in the end (save redudndant shifts) $\\((q_1 * 2^8) x_1 + (q_4 * 2^8) x_4) * 1/2^8$</Sidenote>
 You only perform the correcting shift at the end of the $\sum_{i=0}^{7}x_i \ w_i$  accumulation.
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-15-32.svg" alt="diagram 2026 07 22 15 32" />
