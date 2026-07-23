@@ -70,6 +70,7 @@ Because we process each group (32 weights) in teams of 4 lanes, each lane will "
 
 ### Compute
 Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. The following is the expression of the compute needed to get the partial output (corresponding to a single tile)
+<Sidenote>$s_g$ and $m_g$ can fe factored out for each group expression, the same happens with $d$ and $d_m$ but as a "global" factor</Sidenote>
 $$
 \begin{aligned}
 p_g
