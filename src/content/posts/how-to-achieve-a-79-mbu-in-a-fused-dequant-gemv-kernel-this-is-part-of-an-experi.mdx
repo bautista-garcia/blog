@@ -27,6 +27,7 @@ There are many ways to quantize a model, some methods use the same quant type fo
 
 ### What is a weight block?
 <img src="/blog/assets/diagrams/diagram-2026-07-21-23-58.svg" alt="diagram 2026 07 21 23 58" />
+*Describe the weight block*
 We talked about how weights have a shape of $(M, K)$. Each weight block represents $256$ weights and these are divided into 8 groups of 32, which share the same scales and minimums. Below is how you dequant a weigth using global ($d$) and group (`s[g]` and `m[g]`) scales & minimums
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-00-02.svg" alt="diagram 2026 07 22 00 02" />
@@ -53,7 +54,7 @@ The way these teams are organized have its purpose in the way the scales and min
 
 
 <figure>
-<img src="/blog/assets/diagrams/diagram-2026-07-22-19-48.svg" alt="diagram 2026 07 22 19 48" />
+<img src="/blog/assets/diagrams/diagram-2026-07-23-12-53.svg" alt="diagram 2026 07 23 12 53" />
 <figcaption>Team A scales & minimums</figcaption>
 </figure>
 
