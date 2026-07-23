@@ -64,7 +64,10 @@ The way these teams are organized have its purpose in the way the scales and min
 </figure>
 
 Because we process each group (32 weights) in teams of 4 lanes, each lane will "own" a contiguous portion of 8 weights from each group that the team owns.
+<figure>
 <img src="/blog/assets/diagrams/diagram-2026-07-22-00-28.svg" alt="diagram 2026 07 22 00 28" />
+<figcaption> Figure 6: Weight ownership by each lane </figcaption>
+</figure>
 
 <Sidenote>Each lane also owns its corresponding $x_i$ so that it can perform its partial dot product (i.e: L0 owns $q_0 .. q..7$ & $x_0..x_7$.</Sidenote>
 
@@ -125,6 +128,15 @@ for (ushort i = 0; i < 4; ++i) {
 }
 ```
 <Sidenote>We load weights using two ushort loaders (`q1 and q2`), combined they load 8 weights per iteration (see diagram above for one loader), in 4 iterations they load the 32 weights each lane is responsible of (8 from each of the groups that team owns.</Sidenote>
+
+The loads here appear in a for loop and with repeated reference to $q_1 and q_2$. $q_1$ and $q_2$ are loaded only once and then cached for the other usages. The for loop ends up being unrolled producing loads of 8 contiguous bytes per lane, if we go back to figure 6, we can see that the loads are coalesced between cohorts of 8 lanes.
+<Sidenote>L0 loads $b_0..b7$, L1 loads $b_8..b15$, ... Because they are coalesced they happen on a single read to memory. Across the whole SIMD we have 4 cohorts so the loads from memory should happen in 4 transactions (per column of $W^T$). *NOTE: The real amount of transactions depend on undocumented cache/sector boundaries and alignment (in theory they should be 4)*.</Sidenote>
+
+```asm
+# ASM instruction that maps to the q1 or q2 loads
+# i16, xyzw means four 16-bit components = 8 byte LOAD
+0x230: load r29l_r29h_r30l_r30h, dr7, 2, lsl 2, i16, xyzw, a
+```
 
 When results are reduced we apply the corresponding shifts and multiply each term of the expresion by its corresponding group minimums and scales, as well as the global ones (`dh`). 
 <Sidenote>The `dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]))` performs $\sum_{g}m_gX_g$ for the four groups each lane contributes to.</Sidenote>
