@@ -338,6 +338,14 @@ async function save() {
   const path = `src/content/posts/${filename}`;
 
   let body = bodyEl.value;
+  // MDX rejects inline JSX that isn't closed on the same line — catch the
+  // two mistakes we've seen break the build, before committing.
+  if (body.split('\n').some((l) => l.includes('<Sidenote') && !l.includes('</Sidenote>'))) {
+    return setStatus('A <Sidenote> is not closed on the same line — MDX needs each sidenote on one line.', true);
+  }
+  if (body.split('\n').some((l) => l.includes('<img') && !l.includes('/>'))) {
+    return setStatus('An <img> tag is missing its self-closing "/>" — MDX requires it.', true);
+  }
   if (body.includes('<Sidenote') && !body.includes('import Sidenote')) {
     body = `import Sidenote from '../../components/Sidenote.astro';\n\n` + body;
   }
