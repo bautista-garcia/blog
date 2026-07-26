@@ -234,21 +234,25 @@ h3 {
   .toc {
     display: block;
     position: sticky;
-    top: 2rem;
+    top: 50vh;
+    transform: translateY(-50%);
     align-self: start;
-    border-left: 1px solid var(--rule);
-    padding-left: 1rem;
-    font-family: var(--sans);
-    font-size: 0.78rem;
-    line-height: 1.55;
+    max-height: 85vh;
+    overflow-y: auto;
+    font-family: var(--serif);
+    font-style: italic;
+    font-size: 0.95rem;
+    line-height: 1.4;
   }
 
   .toc .toc-title {
+    font-family: var(--sans);
+    font-style: normal;
     font-size: 0.68rem;
     text-transform: uppercase;
-    letter-spacing: 0.09em;
+    letter-spacing: 0.14em;
     color: var(--muted);
-    margin: 0 0 0.6rem;
+    margin: 0 0 0.9rem;
   }
 
   .toc ul {
@@ -258,7 +262,7 @@ h3 {
   }
 
   .toc li {
-    margin-bottom: 0.4rem;
+    margin-bottom: 0.2rem;
   }
 
   .toc li.d3 {
@@ -266,7 +270,7 @@ h3 {
   }
 
   .toc a {
-    color: var(--muted);
+    color: var(--ink);
   }
 
   .toc a:hover {
@@ -275,8 +279,7 @@ h3 {
   }
 
   .toc a.active {
-    color: var(--ink);
-    font-weight: 600;
+    color: var(--accent);
   }
 }
 
