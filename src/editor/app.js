@@ -296,7 +296,6 @@ function openPost(p) {
   current = { path: p.path, sha: p.sha, filename: p.name, extra };
   titleEl.value = data.title || '';
   slugEl.value = p.name.replace(/\.(md|mdx)$/, '');
-  slugEl.disabled = true;
   dateEl.value = data.date || today();
   tagsEl.value = (data.tags || []).join(', ');
   draftEl.checked = !!data.draft;
@@ -333,9 +332,13 @@ async function save() {
   if (!title) return setStatus('Title is required', true);
   if (!date) return setStatus('Date is required', true);
 
-  const filename = current ? current.filename : `${slugify(slugEl.value || title)}.mdx`;
-  if (!slugify(slugEl.value || title)) return setStatus('Slug is required', true);
+  const slug = slugify(slugEl.value || title);
+  if (!slug) return setStatus('Slug is required', true);
+  // Editing keeps the post's extension; changing the slug renames the file.
+  const ext = current?.filename.match(/\.(md|mdx)$/)?.[0] || '.mdx';
+  const filename = current ? `${slug}${ext}` : `${slug}.mdx`;
   const path = `src/content/posts/${filename}`;
+  const renamed = current && filename !== current.filename;
 
   let body = bodyEl.value;
   // MDX rejects inline JSX that isn't closed on the same line — catch the
@@ -362,21 +365,37 @@ async function save() {
   saveBtn.disabled = true;
   setStatus('Saving…');
   try {
-    const message = current ? `Edit post: ${title}` : `New post: ${title}`;
+    if (renamed) {
+      // Don't clobber a different post that already has the target slug.
+      try {
+        await client.getFile(path);
+        return setStatus(`A post named ${filename} already exists.`, true);
+      } catch {
+        /* 404 — name is free */
+      }
+    }
+    const message = renamed
+      ? `Rename post: ${current.filename} → ${filename}`
+      : current
+        ? `Edit post: ${title}`
+        : `New post: ${title}`;
     let res;
     try {
-      res = await client.putFile(path, textToBase64(content), message, current?.sha);
+      // A rename creates a new file — the old sha must not be sent.
+      res = await client.putFile(path, textToBase64(content), message, renamed ? undefined : current?.sha);
     } catch (e) {
       if (e.status !== 409) throw e;
       const fresh = await client.getFile(path); // sha went stale — retry once
       res = await client.putFile(path, textToBase64(content), message, fresh.sha);
     }
+    if (renamed) {
+      await client.deleteFile(current.path, `Remove old name: ${current.filename}`, current.sha);
+    }
     current = { path, sha: res.content.sha, filename, extra: current?.extra || '' };
     slugEl.value = filename.replace(/\.(md|mdx)$/, '');
-    slugEl.disabled = true;
     deleteBtn.hidden = false;
     dirty = false;
-    setStatus('Saved — committed to the repo ✓');
+    setStatus(renamed ? `Renamed to ${filename} ✓` : 'Saved — committed to the repo ✓');
     refreshList();
   } catch (e) {
     setStatus(e.message, true);

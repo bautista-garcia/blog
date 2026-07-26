@@ -215,6 +215,71 @@ h3 {
   counter-reset: sidenote;
 }
 
+/* Table of contents: hidden until the viewport has room for a left rail. */
+.toc {
+  display: none;
+}
+
+@media (min-width: 1300px) {
+  main.wide {
+    max-width: 70rem;
+  }
+
+  .post-layout {
+    display: grid;
+    grid-template-columns: 10.5rem minmax(0, var(--measure));
+    column-gap: 2.5rem;
+  }
+
+  .toc {
+    display: block;
+    position: sticky;
+    top: 2rem;
+    align-self: start;
+    border-left: 1px solid var(--rule);
+    padding-left: 1rem;
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    line-height: 1.55;
+  }
+
+  .toc .toc-title {
+    font-size: 0.68rem;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    color: var(--muted);
+    margin: 0 0 0.6rem;
+  }
+
+  .toc ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .toc li {
+    margin-bottom: 0.4rem;
+  }
+
+  .toc li.d3 {
+    padding-left: 0.9rem;
+  }
+
+  .toc a {
+    color: var(--muted);
+  }
+
+  .toc a:hover {
+    color: var(--accent);
+    text-decoration: none;
+  }
+
+  .toc a.active {
+    color: var(--ink);
+    font-weight: 600;
+  }
+}
+
 .post-header {
   margin: 2.5rem 0 2rem;
 }

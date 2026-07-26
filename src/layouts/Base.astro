@@ -10,9 +10,11 @@ import { href } from '../lib/url';
 interface Props {
   title?: string;
   description?: string;
+  /** Widen the container (post pages: room for the table of contents). */
+  wide?: boolean;
 }
 
-const { title, description = site.description } = Astro.props;
+const { title, description = site.description, wide = false } = Astro.props;
 const pageTitle = title ? `${title} · ${site.name}` : site.name;
 ---
 
@@ -37,7 +39,7 @@ const pageTitle = title ? `${title} · ${site.name}` : site.name;
         <a class="meta" href={href('tags')}>Tags</a>
       </nav>
     </header>
-    <main>
+    <main class={wide ? 'wide' : undefined}>
       <slot />
     </main>
     <footer class="site-footer">
@@ -49,6 +51,7 @@ const pageTitle = title ? `${title} · ${site.name}` : site.name;
     </footer>
     <script>
       import '../lib/lightbox.js';
+      import '../lib/toc.js';
     </script>
   </body>
 </html>

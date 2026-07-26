@@ -15,27 +15,44 @@ export async function getStaticPaths() {
 }
 
 const { post } = Astro.props;
-const { Content } = await render(post);
+const { Content, headings } = await render(post);
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 ---
 
-<Base title={post.data.title}>
-  <article class="prose">
-    <header class="post-header">
-      <h1>{post.data.title}</h1>
-      <p class="meta">
-        <time datetime={post.data.date.toISOString()}>
-          {formatDate(post.data.date)}
-        </time>
-        {
-          post.data.tags.map((tag) => (
-            <>
-              {' · '}
-              <a href={href(`tags/${tag}`)}>{tag}</a>
-            </>
-          ))
-        }
-      </p>
-    </header>
-    <Content />
+<Base title={post.data.title} wide={toc.length > 0}>
+  <article class={toc.length > 0 ? 'post-layout' : undefined}>
+    {
+      toc.length > 0 && (
+        <nav class="toc" aria-label="Table of contents">
+          <p class="toc-title">Contents</p>
+          <ul>
+            {toc.map((h) => (
+              <li class={h.depth === 3 ? 'd3' : undefined}>
+                <a href={`#${h.slug}`}>{h.text.replace(/[$`]/g, '')}</a>
+              </li>
+            ))}
+          </ul>
+        </nav>
+      )
+    }
+    <div class="prose">
+      <header class="post-header">
+        <h1>{post.data.title}</h1>
+        <p class="meta">
+          <time datetime={post.data.date.toISOString()}>
+            {formatDate(post.data.date)}
+          </time>
+          {
+            post.data.tags.map((tag) => (
+              <>
+                {' · '}
+                <a href={href(`tags/${tag}`)}>{tag}</a>
+              </>
+            ))
+          }
+        </p>
+      </header>
+      <Content />
+    </div>
   </article>
 </Base>
