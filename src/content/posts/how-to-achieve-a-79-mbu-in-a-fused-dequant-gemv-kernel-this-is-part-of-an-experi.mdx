@@ -79,37 +79,37 @@ Since this is a fused dequant + GEMV kernel, we have to dequantize the weights o
 <Sidenote>$s_g$ and $m_g$ can be factored out for each group expression, the same happens with $d$ and $d_m$ but as a "global" factor</Sidenote>
 $$
 \begin{aligned}
-y_{\mathrm{block}}
+y_{block}
 &=
 \sum_{i=0}^{255}
 x_i\left(d\,s_{\lfloor i/32\rfloor}\,q_i
 -d_m\,m_{\lfloor i/32\rfloor}\right)
-\\[4pt]
+\\[12pt]
 &=
 \sum_{g=0}^{7}
 \sum_{i=32g}^{32g+31}
 x_i\left(d\,s_g\,q_i-d_m\,m_g\right)
-\\[8pt]
+\\[16pt]
 p_g
 &=
 \sum_{i=32g}^{32g+31}
 x_i\left(d\,s_g\,q_i-d_m\,m_g\right)
-\\[4pt]
+\\[12pt]
 &=
 d\,s_g
 \underbrace{\sum_{i=32g}^{32g+31}x_iq_i}_{Q_g}
 -
 d_m\,m_g
 \underbrace{\sum_{i=32g}^{32g+31}x_i}_{X_g},
-\\[8pt]
-y_{\mathrm{block}}
+\\[16pt]
+y_{block}
 &=
 \sum_{g=0}^{7}p_g
-\\[4pt]
+\\[12pt]
 &=
 \sum_{g=0}^{7}
 \left(d\,s_g\,Q_g-d_m\,m_g\,X_g\right)
-\\[4pt]
+\\[12pt]
 &=
 d\sum_{g=0}^{7}s_gQ_g
 -
