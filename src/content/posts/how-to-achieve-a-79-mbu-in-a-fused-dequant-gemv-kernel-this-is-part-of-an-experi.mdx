@@ -241,8 +241,8 @@ Measuring performance with metrics such as execution time or tokens per second, 
 <figcaption>Figure 9: Roofline Plot</figcaption>
 </figure>
 
-Roughly explained the roofline model says that a given kernels's maximum performance is limited by three factors: 1. The arithmetic intensity, how many FLOP it does per byte (loaded and stored), 2. The maximum theoretical bandwidth and 3. The maximum theoretical $FLOP/s$ of the hardware we are running the kernel on.<Sidenote>There are some caveats to this, since there are different levels in the memory hierarchy each with different bandwidths (i.e: GMEM, SMEM, ...), and also different compute units (i.e: SP, Tensor cores, ...)each with different $FLOP/s$.
-</Sidenote>
+Roughly explained the roofline model says that a given kernels's maximum performance is limited by three factors: 1. The arithmetic intensity, how many FLOP it does per byte (loaded and stored), 2. The maximum theoretical bandwidth and 3. The maximum theoretical $FLOP/s$ of the hardware we are running the kernel on.<Sidenote>There are some caveats to this, since there are different levels in the memory hierarchy each with different bandwidths (i.e: GMEM, SMEM, ...), and also different compute units (i.e: SP, Tensor cores, ...)each with different $FLOP/s$.</Sidenote>
+
 The arithmetic intensity will place the kernel on the $x$-axis of the roofline plot. If it falls on the left of the ridge point (red font) it will be limited by the max bandwidth (memory bound kernel) and if it falls to the right it will be limited by the max theoretical $FLOP/s$ of the device (compute bound kernel).
 
 *For simplicity since this is clearly a memory bound kernel, the analysis will be made with the higher level of the hierarchy. The $FLOP/s$ will be from the GPU cores (no special hardware unit) and the bandwidth will be the DRAM one.*
