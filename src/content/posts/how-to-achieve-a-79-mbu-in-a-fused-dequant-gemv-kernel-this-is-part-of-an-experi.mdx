@@ -266,9 +266,9 @@ $$
 $AI_{kernel} << AI_{ridge}$ so we know that our maximum atainable performance, will be limited by the bandwidth of our device. *The caveats mentioned earlier about different AI's are skipped since cache reuse isn't really possible (each row of weights is read and only used once), so they won't really move the needle and turn this into a compute bound kernel.*
 
 ### Performance & Conclusion
-Taking the $K=N=4096$ kernel to put as an example, the measured time was $63 \mu s$, and a measured bandwidth of $B = 152.3GBs$ which is a $76\%$ of the memory bound limit, which is related to the overhead introduced by dequantization.
+Taking the $K=N=4096$ kernel to put as an example, the measured time was $63 \mu s$, and a measured bandwidth of $B = 152.3GBs$ which is a $76\%$ of the memory bound limit, which is related to the overhead introduced by dequantization. This suggests that further gains will likely come from reducing dequantization overhead and improving its overlap with memory accesses (to hide latency).
 
-This suggests that further gains will likely come from reducing dequantization overhead and improving its overlap with memory accesses (to hide latency).
+If you have read up to this point, thanks for reading. I am open for suggestions on improving my writing style, knowledge about these kernels or other optimizations that may come to your mind.
 
 
 
