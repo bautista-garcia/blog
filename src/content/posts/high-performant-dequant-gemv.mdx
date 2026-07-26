@@ -251,7 +251,7 @@ Measuring performance with metrics such as execution time or tokens per second, 
 
 <figure>
 <img src="/blog/assets/diagrams/diagram-2026-07-25-15-53.svg" alt="diagram 2026 07 25 15 53" />
-<figcaption>Figure 9: Roofline Plot</figcaption>
+<figcaption>Figure 10: Roofline Plot</figcaption>
 </figure>
 
 Roughly explained the roofline model says that a given kernels's maximum performance is limited by three factors: 1. The arithmetic intensity, how many FLOP it does per byte (loaded and stored), 2. The maximum theoretical bandwidth and 3. The maximum theoretical $FLOP/s$ of the hardware we are running the kernel on.<Sidenote>There are some caveats to this, since there are different levels in the memory hierarchy each with different bandwidths (i.e: GMEM, SMEM, ...), and also different compute units (i.e: SP, Tensor cores, ...)each with different $FLOP/s$.</Sidenote>
