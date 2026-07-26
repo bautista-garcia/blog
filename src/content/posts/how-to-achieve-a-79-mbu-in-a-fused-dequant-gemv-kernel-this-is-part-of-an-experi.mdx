@@ -9,15 +9,15 @@ import Sidenote from '../../components/Sidenote.astro';
 
 ## What is a GEMV
 
-A GEMV is one of the most common operations in LLMs, during the decode phase, each forward pass executes this operation hundreds of times. On a modern architecture like Qwen 3.5, each **Decoder layer** (regardless of GDN or FullAttention) has many projections (Q, K & V as an example) as well as MLPs processing big shapes. This GEMV is a simple matrix vector product (the difference with the GEMM is that the activations vector is one dimensional).
+A GEMV is one of the most common operations in LLMs, during the decode phase, each forward pass executes this operation hundreds of times. On a modern architecture like Qwen 3.5, each **Decoder layer** (regardless of GDN or FullAttention) has many projections (Q, K & V as an example) as well as MLPs processing big shapes. Mathematically the GEMV we will be covering is:
 
-$$x . W^T$$
-<Sidenote>$x: (1, K)$ and $W: (M, K)$</Sidenote>
+$$y = \alpha x . W^T + \beta C $$
+<Sidenote>$x: (1, K)$,  $W: (M, K)$, $\alpha=1$ and $\beta=0$ </Sidenote>
 
 Because this ends up taking almost most of the execution time of each forward pass on decode, it is important to have high performant GEMV kernels to achieve the highest possible decode/generation tps (tokens per second).
 
 ## Dequantization
-In order to run bigger models on computers with lower amount of memory, models are quantized, so that each weight takes less amount of memory. There are metrics such as perplexity, which measures the overall degradation in generative prediction confidence across a text corpus, or KL divergence, which directly quantifies token-by-token probability distribution drift between the original and quantized outputs.
+In order to run bigger models on computers with low amounts of memory, models are quantized, so that each weight takes less space. There are metrics such as perplexity, which measure the overall degradation in a generative prediction confidence across a text corpus, or KL divergence, which directly quantifies token-by-token probability distribution drift between the original and quantized outputs. These and other benchmarks are important to choose how much of a degradation we tolerate, in order to reduce the total used memory.
 
 ### UD-Q4_K_XL
 There are many ways to quantize a model, some methods use the same quant type for all the layers in the model (i.e: FP8 or NVFP4), while other quantization models introduce a mixed quantization schema, where it uses a specific quant type for each different layer of the model. The UD-Q4_K_XL is a method introduced by Unsloth, specific for the Qwen3.5 series of models. It contains **Q4_K, Q5_K, Q6_K, Q8_0 & IQ4_XS** all across the model. *[Quantization methods](https://medium.com/@paul.ilvez/demystifying-llm-quantization-suffixes-what-q4-k-m-q8-0-and-q6-k-really-mean-0ec2770f17d3)*
@@ -26,13 +26,16 @@ There are many ways to quantize a model, some methods use the same quant type fo
 *The specific case I will be talking about is the fused Q4_K + GEMV, Q5_K and Q6_k are very similar (they only changes some scale and minimum storage) and Q8_0 doesn't require dequantization, so it is similar to a performant GEMV.*
 
 ### What is a weight block?
+A weight block is a group of $N$ weights represented using $M$ bytes, for the case of the $Q4K$ quant we will cover, $N = 256$ and  $M = 144$, meaning $M/N = 0.56$ bytes per weight (~4bit quant).
+<figure>
 <img src="/blog/assets/diagrams/diagram-2026-07-21-23-58.svg" alt="diagram 2026 07 21 23 58" />
-*Describe the weight block*
-We talked about how weights have a shape of $(M, K)$. Each weight block represents $256$ weights and these are divided into 8 groups of 32, which share the same scales and minimums. Below is how you dequant a weigth using global ($d$) and group (`s[g]` and `m[g]`) scales & minimums
+<figcaption> Figure 1: Weight block </figcaption>
+</figure>
+These weights are divided into 8 groups of 32, which share the same group scales and minimums. These scales and minimums (globals and per group) are used to dequantize each of the 256 weights in the following way:
 
-<img src="/blog/assets/diagrams/diagram-2026-07-22-00-02.svg" alt="diagram 2026 07 22 00 02" />
+<img src="/blog/assets/diagrams/diagram-2026-07-26-01-22.svg" alt="diagram 2026 07 26 01 22" />
 
-These weight blocks span out across the $K$ dimension of the weight tensor, meaning that we have a total of $N * K/256$ weight blocks, for each layer's tensor, these weight blocks can be processed in parallel and later be reduced if we tile across this K dimension.
+The weight blocks span out across the $K$ dimension of the weight tensor, meaning that we have a total of $N * K/256$ weight blocks, for each layer's tensor, these weight blocks can be processed in parallel and later be reduced if we tile across this K dimension.
 
 ### SIMD & Threadgroups map to data
 Inside metal's backend a SIMD (NVIDIA warp) is a group of 32 lanes (NVIDIA threads) executing instructions with a SIMD control mechanism. For this strategy each SIMD will own a $(1, 1024)$ tile of the activation vector $x$ and a $(2, 1024)$ tile of the weights vector (transposed), producing a partial $(1,2)$ result of the output vector. 
@@ -50,7 +53,7 @@ Each of the cohorts is logically subdivided into "teams" of 4 lanes, where each 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-13-14.svg" alt="diagram 2026 07 22 13 14" />
 
 The way these teams are organized have its purpose in the way the scales and minimums for each group are stored. By loading two contiguous bytes of local scales & minimums, each team ends up owning the groups showed above.
-<Sidenote>All 4 lanes LOAD these local scales and minimums from GMEM to REG</Sidenote>
+<Sidenote>All 4 lanes in the team LOAD these local scales and minimums from GMEM to REG</Sidenote>
 
 
 <figure>
@@ -69,13 +72,24 @@ Because we process each group (32 weights) in teams of 4 lanes, each lane will "
 <figcaption> Figure 6: Weight ownership by each lane </figcaption>
 </figure>
 
-<Sidenote>Each lane also owns its corresponding $x_i$ so that it can perform its partial dot product (i.e: L0 owns $q_0 .. q..7$ & $x_0..x_7$.</Sidenote>
+<Sidenote>Each lane also owns its corresponding $x_i$ so that it can perform its partial dot product (i.e: L0 owns $q_0 .. q..7$ & $x_0..x_7$).</Sidenote>
 
 ### Compute
-Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w^T_{tile}(256,1)$. The following is the expression of the compute needed to get the partial output (corresponding to a single tile)
-<Sidenote>$s_g$ and $m_g$ can fe factored out for each group expression, the same happens with $d$ and $d_m$ but as a "global" factor</Sidenote>
+Since this is a fused dequant + GEMV kernel, we have to dequantize the weights owned by each lane using global and group scale & minimums and also compute $x_{tile}(1,256) @ w_{tile}(256,1)$. The following is the expression of the compute needed to get the partial output (corresponding to a single tile)
+<Sidenote>$s_g$ and $m_g$ can be factored out for each group expression, the same happens with $d$ and $d_m$ but as a "global" factor</Sidenote>
 $$
 \begin{aligned}
+y_{\mathrm{block}}
+&=
+\sum_{i=0}^{255}
+x_i\left(d\,s_{\lfloor i/32\rfloor}\,q_i
+-d_m\,m_{\lfloor i/32\rfloor}\right)
+\\[4pt]
+&=
+\sum_{g=0}^{7}
+\sum_{i=32g}^{32g+31}
+x_i\left(d\,s_g\,q_i-d_m\,m_g\right)
+\\[8pt]
 p_g
 &=
 \sum_{i=32g}^{32g+31}
@@ -103,16 +117,16 @@ d_m\sum_{g=0}^{7}m_gX_g.
 \end{aligned}
 $$
 <Sidenote>A dequantized weight is $w_i = d\,s_g\,q_i-d_m\,m_g$ and the full dot product + dequant is $\sum_{i=0}^{256}x_i \ w_i$</Sidenote>
-The main work for each lane is calculating $X_g$ & $Q_g$ for the corresponding 8 weight portion of each group it owns. Because activations are all stored in FP16, calculating $X_g$ is very straightforward, you load the corresponding portion and you reduce them. However, when computing $Q_g$ you have to account for the shifts each $q_i$ has because of how they are stored.
+The main work for each lane is calculating $X_g$ & $Q_g$ for the corresponding 8 weight portion of each group it owns. Because activations are all stored in FP16, calculating $X_g$ is very straightforward, you load the corresponding portion and you sum reduce them. However, when computing $Q_g$ you have to account for the shifts each $q_i$ has because of how they are stored.
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-15-26.svg" alt="diagram 2026 07 22 15 26" />
 
 When loading a 2 byte portion of the $q_i$ array from the weight block, you get four 4 weights, where three of them are shifted (4, 8 and 12 slots). Because these shifts are the same for all the quants loaded by a lane.
-<Sidenote>i.e: In the first iteration of the loading you load $q_1 << 8$ (equivalent to $q_1 * 2^8$), in the next iteration you load $q_4 * 2^8$. Instead of correcting each shift you do the shifted acumulation and correct in the end (save redudndant shifts) $\\((q_1 * 2^8) x_1 + (q_4 * 2^8) x_4) * 1/2^8$</Sidenote>
-You only perform the correcting shift at the end of the $\sum_{i=0}^{7}x_i \ w_i$  accumulation.
+<Sidenote>i.e: In the first iteration of the loading you load $q_1 << 8$ (equivalent to $q_1 * 2^8$), in the next iteration you load $q_4 * 2^8$ (see figure). Instead of correcting each shift you do the shifted acumulation and correct in the end (save redundant shifts) $\\((q_1 * 2^8) x_1 + (q_4 * 2^8) x_4) * 1/2^8$</Sidenote>
+You only perform the correcting shift at the end of the $\sum_{i=0}^{7}(x_i \ w_i)$  accumulation.
 
 <img src="/blog/assets/diagrams/diagram-2026-07-22-15-32.svg" alt="diagram 2026 07 22 15 32" />
-The following code shows that, each $acc_i$ is responsible for a pair of groups (i.e: G1 and G2 for Team A) and you can see how the accumulation is done without the shifts (only masking the corresponding weights). 
+The following code shows that each $acc_i$ is responsible for a pair of groups (i.e: G1 and G2 for Team A) and you can see how the accumulation is done without the shifts (only masking the corresponding weights). 
 
 ```c++
 for (ushort i = 0; i < 4; ++i) { 
@@ -127,15 +141,12 @@ for (ushort i = 0; i < 4; ++i) {
     acc2[3] += yh[2 * i + 9] * float(q2[i] & 0xf000);
 }
 ```
-The loads here appear in a for loop and with repeated reference to $q_1 and q_2$. $q_1$ and $q_2$ are loaded only once and then cached for the other usages. The for loop ends up being unrolled producing loads of 8 contiguous bytes per lane, if we go back to figure 6, we can see that the loads are coalesced between cohorts of 8 lanes.
-<Sidenote>L0 loads $b_0..b7$, L1 loads $b_8..b15$, ... Because they are coalesced they happen on a single read to memory. Across the whole SIMD we have 4 cohorts so the loads from memory should happen in 4 transactions (per column of $W^T$). *NOTE: The real amount of transactions depend on undocumented cache/sector boundaries and alignment (in theory they should be 4)*.</Sidenote>
-
+The for loop ends up being unrolled producing loads of 8 contiguous bytes per lane, if we go back to figure 6, we can see that the loads are coalesced <Sidenote>L0 loads $b_0..b7$, L1 loads $b_8..b15$, ... Because they are coalesced they happen on a single read to memory. Across the whole SIMD we have 4 cohorts so the loads from memory should happen in 4 transactions (per column of $W^T$). *NOTE: The real amount of transactions depend on undocumented cache/sector boundaries and alignment (in theory they should be 4)*.</Sidenote> between cohorts of 8 lanes. The following is the optimized air code (similar to LLVM IR), which is an intermediate representation before producing the final binary.
 ```asm
 # ASM instruction that maps to the q1 or q2 loads
 # i16, xyzw means four 16-bit components = 8 byte LOAD
 0x230: load r29l_r29h_r30l_r30h, dr7, 2, lsl 2, i16, xyzw, a
 ```
-
 When results are reduced we apply the corresponding shifts and multiply each term of the expresion by its corresponding group minimums and scales, as well as the global ones (`dh`). 
 <Sidenote>The `dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]))` performs $\sum_{g}m_gX_g$ for the four groups each lane contributes to.</Sidenote>
 
@@ -147,7 +158,7 @@ sumf[row] += float(dh[0]) * ((acc1[0] + acc1[1] / 256.0f) * sc8[0] +
              float(dh[1]) * dot(sumy, float4(sc8[2], sc8[3], sc8[6], sc8[7]));
 
 ```
-Below is a diagram that visually shows the contributions made by a single team with regards to a weight block. *The other does the same with groups (G3, G4, G7 and G8).*
+Below is a diagram that visually shows the contributions made by a single team with regards to a weight block. *The other team does the same with groups (G3, G4, G7 and G8).*
 <img src="/blog/assets/diagrams/diagram-2026-07-22-19-33.svg" alt="diagram 2026 07 22 19 33" />
 
 Noting that the group and team separation is just made for dequantization purposes. In the end when we have the partials of each team, each group and each weight block, those are all sum reduced because they belong to the same output tile. 
@@ -223,14 +234,18 @@ kernel void decode_q4k(device half* dst [[buffer(0)]], device const half* src [[
 ```
 
 ## Roofline Analysis
-Measuring performance by time results or tokens per second on the whole model isn't really a fair metric, because these are highly dependent on the hardware the kernels are running on. The fair metric is to analyze if we are using the hardware at our disposal, to the maximum of its capabilities, that is what the Roofline model provides.
+Measuring performance with metrics such as execution time or tokens per second, is not a fair analysis because these are highly dependent on the hardware the kernels are running on. A better analysis comes by checking if we are using the hardware at our disposal, to the maximum of its capabilities, which is what the Roofline model provides.
 
 <figure>
 <img src="/blog/assets/diagrams/diagram-2026-07-25-15-53.svg" alt="diagram 2026 07 25 15 53" />
 <figcaption>Figure 9: Roofline Plot</figcaption>
 </figure>
 
-Roughly explained the roofline model says that a given kernels's maximum performance is limited by three factors: 1. The arithmetic intensity, how many FLOP it does per byte (loaded and stored), 2. The maximum theoretical bandwidth and 3. The maximum theoretical $FLOP/s$ of the hardware we are running the kernel on.<Sidenote>There are some caveats to this, since there are different levels in the memory hierarchy each with different bandwidths (i.e: GMEM, SMEM, ...), and also different compute units (i.e: SP, Tensor cores, ...)each with different $FLOP/s$.</Sidenote>
+Roughly explained the roofline model says that a given kernels's maximum performance is limited by three factors: 1. The arithmetic intensity, how many FLOP it does per byte (loaded and stored), 2. The maximum theoretical bandwidth and 3. The maximum theoretical $FLOP/s$ of the hardware we are running the kernel on.<Sidenote>There are some caveats to this, since there are different levels in the memory hierarchy each with different bandwidths (i.e: GMEM, SMEM, ...), and also different compute units (i.e: SP, Tensor cores, ...)each with different $FLOP/s$.
+</Sidenote>
+The arithmetic intensity will place the kernel on the $x$-axis of the roofline plot. If it falls on the left of the ridge point (red font) it will be limited by the max bandwidth (memory bound kernel) and if it falls to the right it will be limited by the max theoretical $FLOP/s$ of the device (compute bound kernel).
+
+*For simplicity since this is clearly a memory bound kernel, the analysis will be made with the higher level of the hierarchy. The $FLOP/s$ will be from the GPU cores (no special hardware unit) and the bandwidth will be the DRAM one.*
 
 In the case of this Q4_K decode gemv $y = x @ W^T$ where $x: (1, K)$ in FP16, $W^T: (K, N)$ in Q4_K (144 bytes per 256 weight block), and we have tiles of $(1, K) @ (K, 2) = (2,)$ processed by each kernel:
 - $W^T$: $\frac{144}{256} N K$ bytes
