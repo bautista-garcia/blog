@@ -39,6 +39,8 @@ Saving pushes a commit, so the GitHub Action rebuilds and the change is live in 
 
 **Diagrams (Excalidraw):** export SVG from excalidraw.com (tick "Embed scene"), save to `src/assets/diagrams/`, embed with a relative path: `![alt](../../assets/diagrams/foo.svg)`. (Or just use the editor, which handles upload + sizing for you.)
 
+**Dark mode:** manual toggle in the nav (default: light), persisted in `localStorage`. Sidenotes float in the margin on desktop; on mobile they expand inline via the number and are also listed at the end of the post.
+
 ## Local development
 
 ```sh

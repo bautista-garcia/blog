@@ -15,6 +15,10 @@ const base = import.meta.env.BASE_URL;
     <meta name="robots" content="noindex, nofollow" />
     <title>Editor · {site.name}</title>
     <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+    <script is:inline>
+      if (localStorage.getItem('theme') === 'dark')
+        document.documentElement.dataset.theme = 'dark';
+    </script>
   </head>
   <body class="editor-body">
     <div
@@ -183,10 +187,8 @@ const base = import.meta.env.BASE_URL;
         flex-direction: column;
       }
 
-      @media (prefers-color-scheme: dark) {
-        #editor {
-          --active-bg: #2a2925;
-        }
+      [data-theme='dark'] #editor {
+        --active-bg: #2a2925;
       }
 
       #editor button {

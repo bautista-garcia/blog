@@ -26,6 +26,11 @@ const pageTitle = title ? `${title} · ${site.name}` : site.name;
     <title>{pageTitle}</title>
     <meta name="description" content={description} />
     <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
+    <script is:inline>
+      // Apply the stored theme before first paint (default: light).
+      if (localStorage.getItem('theme') === 'dark')
+        document.documentElement.dataset.theme = 'dark';
+    </script>
     <link rel="canonical" href={new URL(Astro.url.pathname, Astro.site)} />
     <meta property="og:title" content={pageTitle} />
     <meta property="og:description" content={description} />
@@ -37,6 +42,7 @@ const pageTitle = title ? `${title} · ${site.name}` : site.name;
       <nav>
         <a class="site-name" href={import.meta.env.BASE_URL}>{site.name}</a>
         <a class="meta" href={href('tags')}>Tags</a>
+        <button id="theme-toggle" class="meta" type="button" aria-pressed="false">Dark</button>
       </nav>
     </header>
     <main class={wide ? 'wide' : undefined}>
@@ -52,6 +58,24 @@ const pageTitle = title ? `${title} · ${site.name}` : site.name;
     <script>
       import '../lib/lightbox.js';
       import '../lib/toc.js';
+
+      const themeBtn = document.getElementById('theme-toggle');
+      const syncThemeBtn = () => {
+        const dark = document.documentElement.dataset.theme === 'dark';
+        themeBtn.textContent = dark ? 'Light' : 'Dark';
+        themeBtn.setAttribute('aria-pressed', String(dark));
+      };
+      themeBtn?.addEventListener('click', () => {
+        if (document.documentElement.dataset.theme === 'dark') {
+          delete document.documentElement.dataset.theme;
+          localStorage.setItem('theme', 'light');
+        } else {
+          document.documentElement.dataset.theme = 'dark';
+          localStorage.setItem('theme', 'dark');
+        }
+        syncThemeBtn();
+      });
+      if (themeBtn) syncThemeBtn();
     </script>
   </body>
 </html>

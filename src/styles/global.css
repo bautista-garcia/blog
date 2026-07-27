@@ -17,18 +17,17 @@
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
 }
 
-/* Dark mode: follows the OS setting. Warm near-black, never pure black;
-   the oxblood accent is lightened to keep contrast on dark paper. */
-@media (prefers-color-scheme: dark) {
-  :root {
-    color-scheme: dark;
-    --paper: #191917;
-    --ink: #e9e7e0;
-    --muted: #96938a;
-    --accent: #d97556;
-    --rule: #36352f;
-    --soft-ink: #b7b4a9;
-  }
+/* Dark mode: manual toggle (default light), persisted in localStorage.
+   Warm near-black, never pure black; the oxblood accent is lightened
+   to keep contrast on dark paper. */
+[data-theme='dark'] {
+  color-scheme: dark;
+  --paper: #191917;
+  --ink: #e9e7e0;
+  --muted: #96938a;
+  --accent: #d97556;
+  --rule: #36352f;
+  --soft-ink: #b7b4a9;
 }
 
 *,
@@ -521,13 +520,20 @@ input.sidenote-toggle {
 }
 
 @media (max-width: 1199.98px) {
-  /* Inline notes collapse to just their superscript number… */
+  /* Inline notes collapse to their number; tapping expands in place… */
   .sidenote {
     display: none;
   }
 
-  .sidenote-toggle.sidenote-number {
-    cursor: default;
+  input.sidenote-toggle:checked + .sidenote {
+    display: block;
+    float: left;
+    clear: both;
+    width: 100%;
+    margin: 0.9rem 0;
+    padding-left: 1rem;
+    border-left: 2px solid var(--rule);
+    color: var(--soft-ink);
   }
 
   /* …and the full text lands at the bottom of the post. */
@@ -557,6 +563,20 @@ input.sidenote-toggle {
     font-size: 0.75em;
     color: var(--muted);
   }
+}
+
+/* Theme toggle in the nav */
+#theme-toggle {
+  background: none;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+#theme-toggle:hover {
+  color: var(--accent);
 }
 
 /* ------------------------------------------------------------------
