@@ -2,7 +2,7 @@
 title: From Standard Attention to Linear Attention Reducing memory footprint
 date: 2026-06-05
 tags: []
-draft: true
+draft: false
 ---
 ### Standard Attention
 In a standard decode step, we have an input vector $x$ of shape $(\text{hidden\_dim})$ and project it to three vectors: $k_t, q_t, v_t$ of shape $(\text{head\_dim} \times n_{\text{heads}})$. Here, $Q$ is the current token query and $K, V$ represent the historical context for all tokens in the sequence ("past and present"). Each time we project $x$ into $k_t$ and $v_t$, we store it in a KV cache so we don't have to recompute these projections on subsequent decode iterations and compute attention for current token generation:
