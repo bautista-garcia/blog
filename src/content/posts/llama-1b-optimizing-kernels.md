@@ -79,8 +79,10 @@ The kernel I wrote utilizes `threadgroups` of shape $(32, 4)$, processing the $K
 <img src="/blog/assets/images/pasted-image-20260404110942.png" alt="pasted image 20260404110942" />
 <figcaption>Figure 5: GEMV Tiles</figcaption>
 </figure>
+
 The kernel implements a series of $K$ outer products in blocks of $B_K$ within an inner loop. This structure allows the loaded elements of $\mathbf{x}$ to be reused across $B_K$ rows of $\mathbf{W}$:
 $$\mathbf{y} = \sum_{k=0}^{K-1} x_k \cdot \mathbf{w}_{k, \ast}$$
+
 
 **Execution Pipeline:**
 1.  **Cooperative Loading:** Each threadgroup cooperatively loads $B_K$ elements of $\mathbf{x}$ into **threadgroup memory** (`tg_mem`, the Metal equivalent of CUDA shared memory).
