@@ -547,9 +547,11 @@ const importGoBtn = $('import-go');
 const importErrorEl = $('import-error');
 
 let importData = null; // { title, slug, date, tags, body, assets: Map }
+let importFiles = new Map(); // name -> File, accumulates across drops
 
 function openImport() {
   importData = null;
+  importFiles = new Map();
   importFilesEl.value = '';
   importStatusEl.textContent = '';
   importMissingEl.innerHTML = '';
@@ -592,19 +594,26 @@ function escapeAttr(s) {
 }
 
 async function analyzeImport(fileList) {
+  // Files accumulate: drop the .md first, then the images — the dialog
+  // stays open and the analysis updates with every drop.
+  for (const f of fileList) importFiles.set(f.name, f);
   importErrorEl.textContent = '';
   importMissingEl.innerHTML = '';
-  importStatusEl.textContent = '';
   importGoBtn.disabled = true;
   importData = null;
 
-  const files = [...fileList];
+  const files = [...importFiles.values()];
   const mds = files.filter((f) => /\.(md|markdown)$/i.test(f.name));
-  if (mds.length !== 1) {
-    importErrorEl.textContent =
-      mds.length === 0 ? 'No .md file among the selected files.' : 'Select exactly one .md file at a time.';
+  if (mds.length === 0) {
+    importStatusEl.textContent = `${files.length} file(s) loaded — now drop the .md file.`;
     return;
   }
+  if (mds.length > 1) {
+    importStatusEl.textContent = '';
+    importErrorEl.textContent = `You dropped ${mds.length} .md files — import one at a time (Cancel to start over).`;
+    return;
+  }
+  importStatusEl.textContent = '';
   const md = mds[0];
   const images = files.filter((f) => f !== md);
   const text = await md.text();
