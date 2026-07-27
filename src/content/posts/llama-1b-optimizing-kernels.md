@@ -1,7 +1,7 @@
 ---
 title: LLAMA 1B   Optimizing Kernels
 date: 2026-04-07
-tags: []
+tags: [llama, kernels]
 draft: false
 ---
 ## Introduction & Motivation
