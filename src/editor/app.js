@@ -29,6 +29,7 @@ const app = $('app');
 const statusEl = $('status');
 const listEl = $('post-list');
 const titleEl = $('f-title');
+const descEl = $('f-desc');
 const slugEl = $('f-slug');
 const dateEl = $('f-date');
 const tagsEl = $('f-tags');
@@ -84,6 +85,7 @@ function splitFrontmatter(raw) {
     const line = lines[i];
     let mm;
     if ((mm = line.match(/^title:\s*(.*)$/))) data.title = unquote(mm[1]);
+    else if ((mm = line.match(/^description:\s*(.*)$/))) data.description = unquote(mm[1]);
     else if ((mm = line.match(/^date:\s*(.*)$/))) data.date = unquote(mm[1]).slice(0, 10);
     else if ((mm = line.match(/^draft:\s*(.*)$/))) data.draft = mm[1].trim() === 'true';
     else if ((mm = line.match(/^tags:\s*\[(.*)\]\s*$/))) {
@@ -112,14 +114,10 @@ function quoteIfNeeded(s) {
   return /[:#"'\[\]{}&*?]|^\s|\s$/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
 }
 
-function buildFile({ title, date, tags, draft, extra, body }) {
-  const fm = [
-    '---',
-    `title: ${quoteIfNeeded(title)}`,
-    `date: ${date}`,
-    `tags: [${tags.join(', ')}]`,
-    `draft: ${draft ? 'true' : 'false'}`,
-  ];
+function buildFile({ title, description, date, tags, draft, extra, body }) {
+  const fm = ['---', `title: ${quoteIfNeeded(title)}`];
+  if (description) fm.push(`description: ${quoteIfNeeded(description)}`);
+  fm.push(`date: ${date}`, `tags: [${tags.join(', ')}]`, `draft: ${draft ? 'true' : 'false'}`);
   if (extra) fm.push(extra);
   fm.push('---', '');
   return fm.join('\n') + body.replace(/^\n+/, '');
@@ -238,6 +236,13 @@ async function hydratePreviewImages() {
     if (src.startsWith(`${BASE}assets/`)) path = `public/${src.slice(BASE.length)}`;
     else if (src.startsWith('../../assets/')) path = `src/${src.slice('../../'.length)}`;
     if (!path) continue;
+    // Imported but not yet saved: the file only exists in browser memory.
+    const pending = pendingAssets.get(path);
+    if (pending) {
+      if (!imgCache.has(path)) imgCache.set(path, URL.createObjectURL(pending));
+      img.src = imgCache.get(path);
+      continue;
+    }
     const cached = imgCache.get(path);
     if (cached) {
       img.src = cached;
@@ -301,6 +306,7 @@ function openPost(p) {
   const { data, extra, body } = splitFrontmatter(p.raw);
   current = { path: p.path, sha: p.sha, filename: p.name, extra };
   titleEl.value = data.title || '';
+  descEl.value = data.description || '';
   slugEl.value = p.name.replace(/\.(md|mdx)$/, '');
   dateEl.value = data.date || today();
   tagsEl.value = (data.tags || []).join(', ');
@@ -319,6 +325,7 @@ function newPost() {
   newExt = '.mdx';
   current = null;
   titleEl.value = '';
+  descEl.value = '';
   slugEl.value = '';
   slugEl.disabled = false;
   dateEl.value = today();
@@ -363,6 +370,7 @@ async function save() {
   const tags = tagsEl.value.split(',').map((t) => t.trim()).filter(Boolean);
   const content = buildFile({
     title,
+    description: descEl.value.trim(),
     date,
     tags,
     draft: draftEl.checked,
@@ -653,6 +661,7 @@ async function analyzeImport(fileList) {
   const base = md.name.replace(/\.(md|markdown)$/i, '');
   importData = {
     title: data.title || base.replace(/[-_]+/g, ' '),
+    description: data.description || '',
     slug: slugify(base),
     date: data.date || today(),
     tags: data.tags || [],
@@ -677,6 +686,7 @@ function doImport() {
   if (!importData) return;
   newPost(); // resets pendingAssets + newExt; also guards unsaved changes
   titleEl.value = importData.title;
+  descEl.value = importData.description;
   slugEl.value = importData.slug;
   slugEl.dataset.touched = '1';
   dateEl.value = importData.date;
@@ -761,7 +771,7 @@ document.querySelectorAll('[data-tb]').forEach((btn) => {
   btn.onclick = () => toolbarActions[btn.dataset.tb]?.();
 });
 
-[titleEl, slugEl, dateEl, tagsEl, draftEl].forEach((el) => el.addEventListener('input', markDirty));
+[titleEl, descEl, slugEl, dateEl, tagsEl, draftEl].forEach((el) => el.addEventListener('input', markDirty));
 titleEl.addEventListener('input', () => {
   if (!current && !slugEl.dataset.touched) slugEl.value = slugify(titleEl.value);
 });

@@ -42,7 +42,7 @@ const { tag, posts } = Astro.props;
             <h2>
               <a href={href(`posts/${post.id}`)}>{post.data.title}</a>
             </h2>
-            <p>{getExcerpt(post.body ?? '')}</p>
+            <p>{post.data.description ?? getExcerpt(post.body ?? '')}</p>
           </div>
         </li>
       ))

@@ -9,6 +9,8 @@ const posts = defineCollection({
     tags: z.array(z.string()).default([]),
     /** Drafts are visible in `npm run dev` but excluded from the deployed build. */
     draft: z.boolean().default(false),
+    /** Home-page excerpt override; defaults to the first paragraph. */
+    description: z.string().optional(),
   }),
 });
 

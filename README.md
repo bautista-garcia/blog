@@ -9,6 +9,7 @@ Open **`/editor/`** on the deployed site or in dev (`npm run dev` → http://loc
 From there everything is a commit to this repo:
 
 - **Write/edit posts** — title, date, tags, draft, and Markdown body with a toolbar (code blocks, math, sidenotes, links). `Cmd/Ctrl+S` saves.
+- **Description** — optional field; overrides the home-page excerpt (default: the post's first paragraph, with markup/LaTeX stripped).
 - **Images & Excalidraw diagrams** — click *Image…* / *Diagram…*, or just **paste/drop into the text area**: image files, and even Excalidraw's *"copy SVG to clipboard"* — paste and it uploads as an SVG. The file is committed to `public/assets/` and an `<img>` tag is inserted at the cursor.
 - **Resizing** — set a pixel width in the upload dialog (or edit the `width="..."` attribute afterwards). Empty means full column width.
 - **Preview** — approximate preview (Markdown + KaTeX); check the real rendering in `npm run dev`.

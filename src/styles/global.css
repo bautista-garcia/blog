@@ -429,6 +429,16 @@ code {
   overflow-y: hidden;
   padding-block: 0.5rem;
   margin: 0 0 1.4rem;
+  /* KaTeX centers via text-align; in a scroll container that clips the
+     left half of over-wide formulas on mobile. Left-align instead… */
+  text-align: left;
+}
+
+/* …and center with margins, which stays fully scrollable when wide. */
+.katex-display > .katex {
+  display: block;
+  width: max-content;
+  margin-inline: auto;
 }
 
 /* Small screens: shrink display math so long derivations fit better;

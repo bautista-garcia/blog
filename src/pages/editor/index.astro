@@ -69,6 +69,11 @@ const base = import.meta.env.BASE_URL;
           <section id="workspace">
             <div id="fields">
               <input id="f-title" placeholder="Post title" autocomplete="off" />
+              <input
+                id="f-desc"
+                placeholder="Description — optional, shown on the home page (default: first paragraph)"
+                autocomplete="off"
+              />
               <div class="row">
                 <label>Slug <input id="f-slug" autocomplete="off" /></label>
                 <label>Date <input id="f-date" type="date" /></label>
