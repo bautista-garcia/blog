@@ -17,6 +17,8 @@ let posts = []; // { name, path, sha, raw, meta }
 let current = null; // { path, sha, filename }
 let dirty = false;
 let modal = { kind: 'images', file: null };
+let pendingAssets = new Map(); // repo path -> File, uploaded on save (Obsidian import)
+let newExt = '.mdx'; // extension for the next new post ('.md' for Obsidian imports)
 
 /* ------------------------------------------------------------------ *
  * DOM refs
@@ -82,7 +84,7 @@ function splitFrontmatter(raw) {
     const line = lines[i];
     let mm;
     if ((mm = line.match(/^title:\s*(.*)$/))) data.title = unquote(mm[1]);
-    else if ((mm = line.match(/^date:\s*(.*)$/))) data.date = mm[1].trim().slice(0, 10);
+    else if ((mm = line.match(/^date:\s*(.*)$/))) data.date = unquote(mm[1]).slice(0, 10);
     else if ((mm = line.match(/^draft:\s*(.*)$/))) data.draft = mm[1].trim() === 'true';
     else if ((mm = line.match(/^tags:\s*\[(.*)\]\s*$/))) {
       data.tags = mm[1].split(',').map((s) => s.trim()).filter(Boolean);
@@ -91,6 +93,9 @@ function splitFrontmatter(raw) {
       while (lines[i + 1]?.match(/^\s+-\s/)) {
         data.tags.push(lines[++i].replace(/^\s+-\s*/, '').trim());
       }
+    } else if ((mm = line.match(/^tags:\s+(.+)$/))) {
+      // Obsidian-style: `tags: foo, bar` (no brackets)
+      data.tags = mm[1].split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean);
     } else extra.push(line);
   }
   return { data, extra: extra.join('\n').trim(), body: raw.slice(m[0].length) };
@@ -292,6 +297,7 @@ async function refreshList() {
 
 function openPost(p) {
   if (dirty && !confirm('Discard unsaved changes?')) return;
+  pendingAssets = new Map(); // abandon any import uploads not yet saved
   const { data, extra, body } = splitFrontmatter(p.raw);
   current = { path: p.path, sha: p.sha, filename: p.name, extra };
   titleEl.value = data.title || '';
@@ -309,6 +315,8 @@ function openPost(p) {
 
 function newPost() {
   if (dirty && !confirm('Discard unsaved changes?')) return;
+  pendingAssets = new Map();
+  newExt = '.mdx';
   current = null;
   titleEl.value = '';
   slugEl.value = '';
@@ -335,8 +343,8 @@ async function save() {
   const slug = slugify(slugEl.value || title);
   if (!slug) return setStatus('Slug is required', true);
   // Editing keeps the post's extension; changing the slug renames the file.
-  const ext = current?.filename.match(/\.(md|mdx)$/)?.[0] || '.mdx';
-  const filename = current ? `${slug}${ext}` : `${slug}.mdx`;
+  const ext = current?.filename.match(/\.(md|mdx)$/)?.[0] || newExt;
+  const filename = `${slug}${ext}`;
   const path = `src/content/posts/${filename}`;
   const renamed = current && filename !== current.filename;
 
@@ -365,6 +373,20 @@ async function save() {
   saveBtn.disabled = true;
   setStatus('Saving…');
   try {
+    if (pendingAssets.size) {
+      // Imported images: upload each before the post that references them.
+      setStatus(`Uploading ${pendingAssets.size} image(s)…`);
+      for (const [assetPath, file] of pendingAssets) {
+        const b64 = await fileToBase64(file);
+        let assetSha;
+        try {
+          assetSha = (await client.getFile(assetPath)).sha; // overwrite if it exists
+        } catch {}
+        await client.putFile(assetPath, b64, `Add image: ${assetPath.split('/').pop()}`, assetSha);
+        pendingAssets.delete(assetPath);
+      }
+      setStatus('Saving…');
+    }
     if (renamed) {
       // Don't clobber a different post that already has the target slug.
       try {
@@ -397,6 +419,7 @@ async function save() {
     dirty = false;
     setStatus(renamed ? `Renamed to ${filename} ✓` : 'Saved — committed to the repo ✓');
     refreshList();
+    schedulePreview(); // newly uploaded images can now hydrate
   } catch (e) {
     setStatus(e.message, true);
   } finally {
@@ -509,6 +532,172 @@ async function doInsert() {
     mInsert.disabled = false;
   }
 }
+
+/* ------------------------------------------------------------------ *
+ * Obsidian import: drop a .md file (+ its images) and get a ready post.
+ * Image references are autodetected from the markdown; dropped image
+ * files are matched by file name. Unmatched references still convert to
+ * their final <img> paths and are listed as missing.
+ * ------------------------------------------------------------------ */
+const importModalEl = $('import-modal');
+const importFilesEl = $('import-files');
+const importStatusEl = $('import-status');
+const importMissingEl = $('import-missing');
+const importGoBtn = $('import-go');
+const importErrorEl = $('import-error');
+
+let importData = null; // { title, slug, date, tags, body, assets: Map }
+
+function openImport() {
+  importData = null;
+  importFilesEl.value = '';
+  importStatusEl.textContent = '';
+  importMissingEl.innerHTML = '';
+  importErrorEl.textContent = '';
+  importGoBtn.textContent = 'Import';
+  importGoBtn.disabled = true;
+  importModalEl.hidden = false;
+}
+
+function closeImport() {
+  importModalEl.hidden = true;
+}
+
+function safeDecode(s) {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+}
+
+// Match a referenced image to a dropped file by file name
+// (exact, %20-decoded, then case-insensitive).
+function findImageFile(ref, files) {
+  const base = ref.split('/').pop();
+  const decoded = safeDecode(base);
+  return (
+    files.find((f) => f.name === base) ||
+    files.find((f) => f.name === decoded) ||
+    files.find((f) => f.name.toLowerCase() === decoded.toLowerCase())
+  );
+}
+
+function escapeAttr(s) {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+}
+
+async function analyzeImport(fileList) {
+  importErrorEl.textContent = '';
+  importMissingEl.innerHTML = '';
+  importStatusEl.textContent = '';
+  importGoBtn.disabled = true;
+  importData = null;
+
+  const files = [...fileList];
+  const mds = files.filter((f) => /\.(md|markdown)$/i.test(f.name));
+  if (mds.length !== 1) {
+    importErrorEl.textContent =
+      mds.length === 0 ? 'No .md file among the selected files.' : 'Select exactly one .md file at a time.';
+    return;
+  }
+  const md = mds[0];
+  const images = files.filter((f) => f !== md);
+  const text = await md.text();
+  const { data, body: rawBody } = splitFrontmatter(text);
+
+  const assets = new Map(); // repo path -> File
+  const missing = [];
+  let body = rawBody;
+
+  // Obsidian embeds: ![[image.png]], ![[image.png|300]], ![[image.png|caption]]
+  body = body.replace(/!\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (match, ref, alias) => {
+    ref = ref.trim();
+    const file = findImageFile(ref, images);
+    const name = sanitizeFilename(safeDecode(ref.split('/').pop()));
+    const a = (alias || '').trim();
+    const width = /^\d+$/.test(a) ? ` width="${a}"` : '';
+    const alt = escapeAttr(a && !/^\d+$/.test(a) ? a : name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' '));
+    if (file) assets.set(`public/assets/images/${name}`, file);
+    else missing.push(ref);
+    return `<img src="${BASE}assets/images/${name}" alt="${alt}"${width} />`;
+  });
+
+  // Standard markdown images with relative paths (external URLs untouched)
+  body = body.replace(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g, (match, alt, url) => {
+    if (/^https?:\/\//i.test(url)) return match;
+    const file = findImageFile(url.trim(), images);
+    const name = sanitizeFilename(safeDecode(url.trim().split('/').pop()));
+    if (file) assets.set(`public/assets/images/${name}`, file);
+    else missing.push(url.trim());
+    return `<img src="${BASE}assets/images/${name}" alt="${escapeAttr(alt)}" />`;
+  });
+
+  // Wikilinks -> plain text (their target notes don't exist on the blog)
+  body = body.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2');
+  body = body.replace(/\[\[([^\]]+)\]\]/g, '$1');
+
+  const base = md.name.replace(/\.(md|markdown)$/i, '');
+  importData = {
+    title: data.title || base.replace(/[-_]+/g, ' '),
+    slug: slugify(base),
+    date: data.date || today(),
+    tags: data.tags || [],
+    body,
+    assets,
+  };
+
+  const total = assets.size + missing.length;
+  importStatusEl.textContent = `${md.name}: ${
+    total === 0 ? 'no image references found' : `${assets.size} of ${total} referenced image(s) matched`
+  }.`;
+  for (const m of missing) {
+    const li = document.createElement('li');
+    li.textContent = m;
+    importMissingEl.appendChild(li);
+  }
+  importGoBtn.textContent = missing.length ? 'Import anyway' : 'Import';
+  importGoBtn.disabled = false;
+}
+
+function doImport() {
+  if (!importData) return;
+  newPost(); // resets pendingAssets + newExt; also guards unsaved changes
+  titleEl.value = importData.title;
+  slugEl.value = importData.slug;
+  slugEl.dataset.touched = '1';
+  dateEl.value = importData.date;
+  tagsEl.value = importData.tags.join(', ');
+  draftEl.checked = true;
+  bodyEl.value = importData.body.replace(/^\n+/, '');
+  pendingAssets = importData.assets;
+  newExt = '.md'; // plain Markdown — arbitrary Obsidian content can't hit MDX parse errors
+  dirty = true;
+  schedulePreview();
+  setStatus(
+    importData.assets.size
+      ? `Imported — review, then Save. ${importData.assets.size} image(s) upload on save.`
+      : 'Imported — review, then Save.',
+  );
+  closeImport();
+  bodyEl.focus();
+}
+
+$('btn-import').onclick = openImport;
+$('import-cancel').onclick = closeImport;
+importGoBtn.onclick = doImport;
+importFilesEl.onchange = () => importFilesEl.files.length && analyzeImport(importFilesEl.files);
+importModalEl.addEventListener('click', (e) => e.target === importModalEl && closeImport());
+const importDrop = $('import-drop');
+importDrop.addEventListener('dragover', (e) => e.preventDefault());
+importDrop.addEventListener('drop', (e) => {
+  e.preventDefault();
+  if (e.dataTransfer.files.length) analyzeImport(e.dataTransfer.files);
+});
 
 /* ------------------------------------------------------------------ *
  * Auth gate

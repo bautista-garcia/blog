@@ -60,6 +60,7 @@ const base = import.meta.env.BASE_URL;
           <aside id="sidebar">
             <div class="side-head">
               <button id="btn-new" class="primary">+ New post</button>
+              <button id="btn-import" title="Import a Markdown file from Obsidian">Import…</button>
               <button id="btn-refresh" title="Reload from GitHub">↻</button>
             </div>
             <ul id="post-list"></ul>
@@ -96,6 +97,31 @@ const base = import.meta.env.BASE_URL;
               <div id="preview" class="prose" hidden></div>
             </div>
           </section>
+        </div>
+      </div>
+
+      <!-- Obsidian import modal -->
+      <div id="import-modal" hidden>
+        <div class="modal-card">
+          <h2>Import from Obsidian</h2>
+          <p>
+            Drop a <code>.md</code> file and the editor finds every image the note references.
+            To bring the images along, drop the note <em>together with the image files</em>
+            from your vault (e.g. select all in the folder). Embeds like
+            <code>![[image.png]]</code> and wikilinks are converted automatically; images
+            upload when you save the post.
+          </p>
+          <div id="import-drop">
+            Drop files here, or
+            <label class="filebtn">browse<input id="import-files" type="file" multiple hidden /></label>
+          </div>
+          <p id="import-status" class="muted-text"></p>
+          <ul id="import-missing"></ul>
+          <div class="row end">
+            <button id="import-cancel">Cancel</button>
+            <button id="import-go" class="primary" disabled>Import</button>
+          </div>
+          <p id="import-error" class="error"></p>
         </div>
       </div>
 
@@ -451,7 +477,8 @@ const base = import.meta.env.BASE_URL;
       }
 
       /* ---- Modal ---- */
-      #modal {
+      #modal,
+      #import-modal {
         position: fixed;
         inset: 0;
         background: rgba(28, 28, 26, 0.35);
@@ -483,11 +510,37 @@ const base = import.meta.env.BASE_URL;
         color: #44443f;
       }
 
-      #drop {
+      #drop,
+      #import-drop {
         border: 2px dashed var(--rule);
         border-radius: 6px;
         padding: 1.6rem;
         text-align: center;
+        color: var(--muted);
+      }
+
+      /* ---- Import modal ---- */
+      .muted-text {
+        color: var(--muted);
+        font-size: 0.82rem;
+        margin: 0;
+      }
+
+      #import-missing {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--accent);
+      }
+
+      #import-missing:empty {
+        display: none;
+      }
+
+      #import-missing li::before {
+        content: 'missing: ';
         color: var(--muted);
       }
 

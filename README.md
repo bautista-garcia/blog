@@ -12,6 +12,7 @@ From there everything is a commit to this repo:
 - **Images & Excalidraw diagrams** — click *Image…* / *Diagram…*, or just **paste/drop into the text area**: image files, and even Excalidraw's *"copy SVG to clipboard"* — paste and it uploads as an SVG. The file is committed to `public/assets/` and an `<img>` tag is inserted at the cursor.
 - **Resizing** — set a pixel width in the upload dialog (or edit the `width="..."` attribute afterwards). Empty means full column width.
 - **Preview** — approximate preview (Markdown + KaTeX); check the real rendering in `npm run dev`.
+- **Import from Obsidian** — click *Import…* in the sidebar and drop a `.md` file. The editor autodetects every image the note references; to bring the files along, drop the note **together with the image files** from your vault (e.g. select all in the folder). `![[embeds]]` (with `|width` / `|caption`), `[[wikilinks]]` (→ plain text), and YAML frontmatter (title/date/tags) are converted automatically. Matched images upload when you save; anything unmatched is listed as missing and its `<img>` path is left ready for a later upload. Imported posts are saved as plain `.md` (safer for arbitrary Markdown).
 
 Saving pushes a commit, so the GitHub Action rebuilds and the change is live in ~a minute.
 
