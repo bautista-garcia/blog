@@ -2,17 +2,33 @@
    Design tokens
    ------------------------------------------------------------------ */
 :root {
+  color-scheme: light;
   --paper: #fcfcf9; /* near-white, barely warm */
   --ink: #1c1c1a;
   --muted: #6f6f68;
   --accent: #8a2a1b; /* oxblood — links only */
   --rule: #e3e3dc; /* hairlines */
+  --soft-ink: #44443f; /* quotes, notes, captions */
   --measure: 38rem; /* text column */
   --rail: 13.5rem; /* sidenote column */
   --gutter: 3rem;
   --serif: 'Source Serif 4', Georgia, 'Times New Roman', serif;
   --sans: ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
   --mono: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+}
+
+/* Dark mode: follows the OS setting. Warm near-black, never pure black;
+   the oxblood accent is lightened to keep contrast on dark paper. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+    --paper: #191917;
+    --ink: #e9e7e0;
+    --muted: #96938a;
+    --accent: #d97556;
+    --rule: #36352f;
+    --soft-ink: #b7b4a9;
+  }
 }
 
 *,
@@ -321,7 +337,7 @@ h3 {
   margin: 0 0 1.4rem;
   padding-left: 1.2rem;
   border-left: 2px solid var(--rule);
-  color: #44443f;
+  color: var(--soft-ink);
 }
 
 .prose hr {
@@ -495,24 +511,51 @@ input.sidenote-toggle {
     width: var(--rail);
     margin-right: calc(-1 * (var(--rail) + var(--gutter)));
     margin-bottom: 1rem;
-    color: #44443f;
+    color: var(--soft-ink);
   }
 }
 
+/* Footnotes section: only on small screens, where margin notes don't fit. */
+.footnotes {
+  display: none;
+}
+
 @media (max-width: 1199.98px) {
+  /* Inline notes collapse to just their superscript number… */
   .sidenote {
     display: none;
   }
 
-  input.sidenote-toggle:checked + .sidenote {
+  .sidenote-toggle.sidenote-number {
+    cursor: default;
+  }
+
+  /* …and the full text lands at the bottom of the post. */
+  .footnotes {
     display: block;
-    float: left;
-    clear: both;
-    width: 100%;
-    margin: 0.9rem 0;
-    padding-left: 1rem;
-    border-left: 2px solid var(--rule);
-    color: #44443f;
+    font-size: 0.85rem;
+    line-height: 1.55;
+    color: var(--soft-ink);
+  }
+
+  .footnotes hr {
+    border: 0;
+    border-top: 1px solid var(--rule);
+    margin: 2.5rem 0 1.2rem;
+  }
+
+  .footnotes ol {
+    margin: 0;
+    padding-left: 1.2rem;
+  }
+
+  .footnotes li {
+    margin-bottom: 0.5rem;
+  }
+
+  .footnotes li::marker {
+    font-size: 0.75em;
+    color: var(--muted);
   }
 }
 

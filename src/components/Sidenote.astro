@@ -4,7 +4,8 @@ import { nextSidenoteId } from '../lib/sidenote';
 /**
  * Tufte-style sidenote for MDX posts.
  * Wide screens: floats in the right margin, numbered automatically.
- * Small screens: hidden until the reader taps the superscript number.
+ * Small screens: collected into a footnotes section at the end of the
+ * post (by a rehype plugin); the superscript number stays as marker.
  *
  * Usage inside a paragraph of an .mdx post:
  *   Some claim worth qualifying<Sidenote>The qualification, which would
