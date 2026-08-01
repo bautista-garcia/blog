@@ -1,0 +1,139 @@
+---
+title: Flash Attention for decode
+date: 2026-08-01
+tags: []
+draft: false
+---
+import Sidenote from '../../components/Sidenote.astro';
+
+## A short description of an attention layer
+Everything starts with three standard Linear projections:
+$$
+\begin{aligned}
+q_h &= xW_h^Q,\\
+K_h &= XW_h^K,\\
+V_h &= XW_h^V,
+\end{aligned}
+$$
+Where $X\in\mathbb{R}^{T\times d_{\text{model}}}$ is the sequence, and \(h\) indexes an attention head. On each decode forward pass we only do the projections for the current token $x$, meaning $a = xW_h^a$, $a = \{Q, K, V\}$. All the other $K_h[0: T-1]$ and $V_h[0: T-1]$ are projections reused from the $T-1$ previous forward passes, all stored on the **KV cache**.
+One thing to notice here is that each attention head is completely independent from each other.<Sidenote>This is good because they can be processed fully in parallel.</Sidenote>
+
+$$
+O_h
+=
+\operatorname{softmax}
+\left(
+\frac{Q_hK_h^{\mathsf T}}{\sqrt{d_h}} + M
+\right)V_h.
+$$
+<Sidenote>The $M$ shown in the formula is the causal mask, this mask makes each token only "look" into the past (because LLMs are next token predictors). This mask is not necessary in decode since the query only contains the projection of the curren token. [Causal Attention](https://sebastianraschka.com/faq/docs/causal-attention.html)</Sidenote>
+
+Once with all the projections you do a $Q_hK_h^{\mathsf T}$ matmul, and you normalize it using the **head dimension ($d_h$)** to get the **scores** ($S$). *Visually for a single head:*
+
+<figure>
+<img src="/blog/assets/diagrams/diagram-2026-08-01-15-11.svg" alt="diagram 2026 08 01 15 11" />
+<figcaption>Figure 1: Attention scores</figcaption>
+</figure>
+<Sidenote>The diagram shows a decode attention $q: (1, \text{head}_{dim})$</Sidenote>
+
+We then apply the **softmax** operation to the scores, mathematically defined for each of the $j \in \{0..(T-1)\}$ as  $\operatorname{softmax}_{\mathrm{row}}(S)_{j} = \frac{e^{S_{j}}} {\sum_{k=1}^{n}e^{S_{k}}}$. In practice the softmax operation is done in the following way:
+$$
+\frac{e^{S_{j}}}{\sum_k e^{S_{k}}}
+=
+\frac{e^{S_{j}-m}}
+{\sum_k e^{S_{k}-m}},
+\qquad
+m=\max_k S_{k},
+$$
+It basically introduces a max normalization factor for [numerical stability](https://cs231n.github.io/linear-classify/#:~:text=Practical%20issues%3A%20Numeric,mathematically%20equivalent)%20expression%3A). This is the maximum score from each of the rows (in this case there is only a single score row since we are on decode stage).
+
+In order to get the final output we do a matmul between the "softmaxed" scores and the $V$ matrix, getting a $(1, T) @ (T, 256) = (1, 256) = (256,)$ output per head.
+
+<figure>
+<img src="/blog/assets/diagrams/diagram-2026-08-01-19-16.svg" alt="diagram 2026 08 01 19 16" />
+<figcaption>Figure 2: Matmul as weighted average</figcaption>
+</figure>
+
+We can optionally apply a gate vector $g_h[d]$ to this output vector (done in Qwen3.5) as:
+$$
+Y_h[d] = O_h[d],\
+\qquad
+\sigma(g_h[d])=\frac{1}{1+e^{-g_h[d]}}
+$$
+
+Finally all of the attention heads are flattened, from $(16, 256)$ to $(4096,)$ <Sidenote>Qwen 3.5:9B has 16 query heads, each with a $(256,)$ head dimension.</Sidenote> and go through a final output projection layer defined as $O=W_oY$.
+
+## How do we make it fast?
+Now that we know everything that happens on an attention layer in a decode forward pass, we can get into the details about making it fast on a GPU. 
+
+We talked about how each attention head is independent of each other (their results are only concatenated in the end), this means that each head can belong to a different threadgroup.<Sidenote>It is usually convenient to place tasks that are dependent on each other on the same threadgroup, since they can communicate through threadgroup memory</Sidenote>. However, assigning one threadgroup per attention head is not very efficient, especially for long contexts ($T$ dimension from the figures). We would have only 16 threadgroups working (poor scheduling), each with a huge matrix (each threadgroup does not have much threadgroup and register space available), this is why we must achieve a finer grained division.
+
+If we were to divide each attention head across the $d_h$ (head dimension) we would need a lot of communication between threadgroups that own the same head (and different portions of the head) in order to perform each matmul, in GPUs we must try to reduce communication all we can.
+
+The other option is to divide work across the $T$ (context dimension). If you see the matvec from figure 1, each token can perform the dot product against $q$ (to produce a score) without needing communication<Sidenote>Communication is not restricted to message passaging, it can also be a read and write from a common memory</Sidenote> with other tokens. However, in the softmax step we encounter a problem. We talked about the need of a max normalization factor for numerical stability, so if we were to divide across the T dimension, each threadgroup should write the scores it owns to global memory and then read from it the complete scores vector to complete the softmax step. Unless ...
+
+### Online Softmax
+There is a way for each threadgroup to compute a partial softmax and then correct them in the end after communicating with other threadgroups to calculate the global maximum. By doing this, the communication step doesn't block the compute.
+
+For attention scores $s_i$ and values $v_i$, softmax attention is (visually in figure 2):
+$$
+O_h
+=
+\operatorname{softmax}
+\left(
+\frac{Q_hK_h^{\mathsf T}}{\sqrt{d_h}}
+\right)V_h =
+\frac{\sum_i e^{s_i-m}v_i}
+     {\sum_i e^{s_i-m}} = \frac{n(m)}{l(m)}
+$$
+For online softmax each unit of work will own a tuple state $(n, m, l)$
+
+#### Example
+Let a threadgroup own the score for token 1:  $s_1 = q_1 @ k^T_1$ (also owns $v_1$). The state from that threadgroup is:
+$$
+m=s_1,\qquad l=1,\qquad n=v_1.
+$$
+
+Now the threadgroup processes token 2, whose score and value are
+$$
+s_2=q_1 @ k_2^{\mathsf T},
+\qquad
+v_2.
+$$
+The new maximum is
+$$
+m'=\max(m,s_2)=\max(s_1,s_2).
+$$
+The contribution from token 1 must be corrected because its accumulator was expressed relative to $m=s_1$:<Sidenote>The correction comes from the following property of exponentials $e^{s_i-m'} = e^{s_i-m}\,e^{m-m'}.$ with $m$ being the old maximum and $m'$ being the new maximum.</Sidenote>
+$$
+\alpha=e^{m-m'}.
+$$
+The contribution from token 2, expressed relative to the new maximum, is
+$$
+\beta=e^{s_2-m'}.
+$$
+The updated state becomes
+$$
+l'=\alpha l+\beta,
+$$
+$$
+n'=\alpha n+\beta v_2.
+$$
+Substituting the initial state gives
+$$
+l'
+=
+e^{s_1-m'}+e^{s_2-m'},
+$$
+and
+$$
+n'
+=
+e^{s_1-m'}v_1+e^{s_2-m'}v_2.
+$$
+After the two tokens have been processed, the normalized attention result is
+$$
+o=\frac{n'}{l'}.
+$$
+The state $(m',l',n')$ can then be updated in exactly the same way when the threadgroup processes token 3, token 4, and so on.
+
