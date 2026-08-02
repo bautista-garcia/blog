@@ -73,8 +73,6 @@ If we were to divide each attention head across the $d_h$ (head dimension) we wo
 The other option is to divide work across the $T$ (context dimension). If you see the matvec from figure 1, each token can perform the dot product against $q$ (to produce a score) without needing communication<Sidenote>Communication is not restricted to message passaging, it can also be a read and write from a common memory</Sidenote> with other tokens. However, in the softmax step we encounter a problem. We talked about the need of a max normalization factor for numerical stability, so if we were to divide across the T dimension, each threadgroup should write the scores it owns to global memory and then read from it the complete scores vector to complete the softmax step. Unless ...
 
 ### Online Softmax
-There is a way for each threadgroup to compute a partial softmax and then correct them in the end after communicating with other threadgroups to calculate the global maximum. By doing this, the communication step doesn't block the compute.
-
 For attention scores $s_i$ and values $v_i$, softmax attention is (visually in figure 2):
 $$
 O_h
@@ -83,9 +81,19 @@ O_h
 \left(
 \frac{Q_hK_h^{\mathsf T}}{\sqrt{d_h}}
 \right)V_h =
+\sum_{i=0}^{T-1} \left( \frac{e^{s_i - m}}{\sum_{j=0}^{T-1} e^{s_j - m}} \right) v_i =
 \frac{\sum_i e^{s_i-m}v_i}
      {\sum_i e^{s_i-m}} = \frac{n(m)}{l(m)}
 $$
+
+
+We want to divide work across threadgroups that will not communicate (during the compute phase). The online softmax provides us with a method to compute a partial result with a set of scores $S = \{s_i\}$ a threadgroup owns, and then adjust those results with the data the other threadgroups own. This method is based on the following property of exponentials:
+
+$$e^{s_i-m'} = e^{s_i-m}\,e^{m-m'}$$
+
+Think about a threadgroup owning a set $S$ of scores, where the maximum score is $m$,
+
+
 For online softmax each unit of work will own a tuple state $(n, m, l)$
 
 #### Example
@@ -104,7 +112,8 @@ The new maximum is
 $$
 m'=\max(m,s_2)=\max(s_1,s_2).
 $$
-The contribution from token 1 must be corrected because its accumulator was expressed relative to $m=s_1$:<Sidenote>The correction comes from the following property of exponentials $e^{s_i-m'} = e^{s_i-m}\,e^{m-m'}.$ with $m$ being the old maximum and $m'$ being the new maximum.</Sidenote>
+The contribution from token 1 must be corrected because its accumulator was expressed relative to $m=s_1$:
+
 $$
 \alpha=e^{m-m'}.
 $$
