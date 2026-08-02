@@ -81,20 +81,19 @@ O_h
 \left(
 \frac{Q_hK_h^{\mathsf T}}{\sqrt{d_h}}
 \right)V_h =
-\sum_{i=0}^{T-1} \left( \underbrace{\frac{e^{s_i - m}}{\sum_{j=0}^{T-1} e^{s_j - m}}} \right) v_i =
+\sum_{i=0}^{T-1} \underbrace{ \left( \frac{e^{s_i - m}}{\sum_{j=0}^{T-1} e^{s_j - m}}\right) }_{s_i} v_i =
 \frac{\sum_i e^{s_i-m}v_i}
      {\sum_i e^{s_i-m}} = \frac{n(m)}{l(m)}
 $$
 
 
-We want to divide work across threadgroups that will not communicate (during the compute phase). The online softmax provides us with a method to compute a partial result with a set of scores $S = \{s_i\}$ a threadgroup owns, and then adjust those results with the data the other threadgroups own. This method is based on the following property of exponentials:
+We want to divide work across threadgroups that will not communicate (during the compute phase). The online softmax provides us with a method to compute a partial result with a set of scores $S = \{s_i\}$ a threadgroup owns, and then adjust those results based on the other threadgroup's data.
+
+Think about a threadgroup owning a set $S$ of scores, where the maximum score is $m$, it will compute its corresponding partial softmax using $e^{s_i - m}$. Then another threadgroup has a set $S'$ with max $m'$ where $m' > m$. The first threadgroup has to correct its partial results since the max it used wasn't the real maximum (it was merely a local max), it can do so like:
 
 $$e^{s_i-m'} = e^{s_i-m}\,e^{m-m'}$$
 
-Think about a threadgroup owning a set $S$ of scores, where the maximum score is $m$,
-
-
-For online softmax each unit of work will own a tuple state $(n, m, l)$
+The best way to go about using this rule is for each unit of work (which owns a set of scores) having a state tuple $(n, m, l)$. Instead of having to update $O_h$ constantly, it just updates the state until all the scores have been accounted for.
 
 #### Example
 Let a threadgroup own the score for token 1:  $s_1 = q_1 @ k^T_1$ (also owns $v_1$). The state from that threadgroup is:
@@ -115,8 +114,10 @@ $$
 The contribution from token 1 must be corrected because its accumulator was expressed relative to $m=s_1$:
 
 $$
-\alpha=e^{m-m'}.
+\alpha=e^{s_1 - m} e^{m-m'} = e^0 e^{m - m'}.
 $$
+<Sidenote>Update rule in action</Sidenote>
+
 The contribution from token 2, expressed relative to the new maximum, is
 $$
 \beta=e^{s_2-m'}.
@@ -134,15 +135,19 @@ l'
 =
 e^{s_1-m'}+e^{s_2-m'},
 $$
-and
 $$
 n'
 =
 e^{s_1-m'}v_1+e^{s_2-m'}v_2.
 $$
-After the two tokens have been processed, the normalized attention result is
-$$
-o=\frac{n'}{l'}.
-$$
-The state $(m',l',n')$ can then be updated in exactly the same way when the threadgroup processes token 3, token 4, and so on.
+
+This can be iteratively applied forever. Also the state $l$ and $n$ represented a single processed score for this example, but in reality they can represent tens of processed scores which will update their partial results using the same $l'$ and $n'$ formulas.
+
+## Tiling and dividing work
+Now that we know division across the context dimension is possible due to **online softmax**, we can explain how a performant metal kernel divides it work across threadgroups and simdgroups. 
+
+...
+
+
+
 
