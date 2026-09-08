@@ -353,6 +353,20 @@ h3 {
   cursor: zoom-in;
 }
 
+/* Excalidraw exports often include a white canvas. Blending makes legacy
+   exports feel transparent; newly uploaded SVGs have that canvas removed. */
+.prose img.excalidraw-diagram,
+.prose img[src*='/assets/diagrams/'][src*='.svg'] {
+  background: transparent;
+  mix-blend-mode: multiply;
+}
+
+[data-theme='dark'] .prose img.excalidraw-diagram,
+[data-theme='dark'] .prose img[src*='/assets/diagrams/'][src*='.svg'] {
+  filter: invert(1) hue-rotate(180deg);
+  mix-blend-mode: screen;
+}
+
 /* Figures: image + caption ("legend") */
 .prose figure {
   margin: 0 0 1.4rem;
@@ -396,6 +410,19 @@ h3 {
   background: var(--paper); /* transparent SVGs stay readable */
   border-radius: 4px;
   box-shadow: 0 8px 40px rgba(0, 0, 0, 0.35);
+}
+
+.lightbox img.excalidraw-diagram,
+.lightbox img[src*='/assets/diagrams/'][src*='.svg'] {
+  background: var(--paper);
+  mix-blend-mode: normal;
+}
+
+[data-theme='dark'] .lightbox img.excalidraw-diagram,
+[data-theme='dark'] .lightbox img[src*='/assets/diagrams/'][src*='.svg'] {
+  /* This neutral inverts to the site's #191917 paper color. */
+  background: #e6e6e8;
+  filter: invert(1) hue-rotate(180deg);
 }
 
 code {

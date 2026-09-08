@@ -447,7 +447,151 @@ function renderPreview() {
     link.rel = 'noopener';
   });
   renderOutline();
+  installPreviewImageControls();
   hydratePreviewImages();
+}
+
+function rewriteImageWidth(source, targetSource, targetOccurrence, width) {
+  let occurrence = 0;
+  let changed = false;
+  const tokenPattern = /<img\b[^>]*\/?\s*>|!\[([^\]]*)\]\(\s*([^\s)]+)(?:\s+["']([^"']*)["'])?\s*\)/gi;
+  const nextSource = source.replace(tokenPattern, (token, markdownAlt, markdownSource, markdownTitle) => {
+    const htmlSource = token.match(/\bsrc\s*=\s*(["'])(.*?)\1/i)?.[2];
+    const imageSource = htmlSource || markdownSource;
+    if (imageSource !== targetSource || occurrence++ !== targetOccurrence) return token;
+
+    changed = true;
+    if (htmlSource) {
+      const withoutWidth = token.replace(
+        /\s+width\s*=\s*(?:["'][^"']*["']|[^\s>]+)/i,
+        '',
+      );
+      if (width === null) return withoutWidth;
+      const closing = /\/\s*>$/.test(withoutWidth) ? ' />' : '>';
+      return withoutWidth.replace(/\s*\/?\s*>$/, ` width="${width}"${closing}`);
+    }
+
+    if (width === null) return token;
+    const title = markdownTitle ? ` title="${escapeAttribute(markdownTitle)}"` : '';
+    return `<img src="${escapeAttribute(markdownSource)}" alt="${escapeAttribute(markdownAlt)}"${title} width="${width}" />`;
+  });
+  return { source: nextSource, changed };
+}
+
+function commitPreviewImageWidth(image, width) {
+  const result = rewriteImageWidth(
+    markdownEditor.getValue(),
+    image.dataset.editorSource,
+    Number(image.dataset.editorOccurrence),
+    width,
+  );
+  if (!result.changed) {
+    flashStatus('This image could not be matched in the Markdown source.', 'error');
+    return;
+  }
+  markdownEditor.setValue(result.source);
+  flashStatus(width === null ? 'Image width reset to automatic.' : `Image width set to ${width}px.`, 'success');
+}
+
+function installPreviewImageControls() {
+  const occurrences = new Map();
+  for (const image of [...elements.preview.querySelectorAll('img')]) {
+    const source = image.getAttribute('src') || '';
+    const occurrence = occurrences.get(source) || 0;
+    occurrences.set(source, occurrence + 1);
+    image.dataset.editorSource = source;
+    image.dataset.editorOccurrence = String(occurrence);
+    image.tabIndex = 0;
+    if (source.includes('/assets/diagrams/') && /\.svg(?:$|[?#])/i.test(source)) {
+      image.classList.add('excalidraw-diagram');
+    }
+
+    const shell = document.createElement('span');
+    shell.className = 'preview-image-shell';
+    const declaredWidth = Number(image.getAttribute('width'));
+    if (declaredWidth > 0) shell.style.width = `${declaredWidth}px`;
+    image.before(shell);
+    shell.append(image);
+
+    const tools = document.createElement('span');
+    tools.className = 'preview-image-tools';
+    const size = document.createElement('output');
+    size.textContent = declaredWidth > 0 ? `${declaredWidth}px` : 'Auto';
+    const handle = document.createElement('button');
+    handle.type = 'button';
+    handle.className = 'preview-image-handle';
+    handle.setAttribute('aria-label', 'Drag left or right to resize image');
+    handle.title = 'Drag to resize';
+    handle.textContent = '↔';
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.className = 'preview-image-reset';
+    reset.textContent = 'Auto';
+    reset.title = 'Use the image’s natural size';
+    tools.append(size, handle, reset);
+    shell.append(tools);
+
+    const select = () => {
+      elements.preview.querySelectorAll('.preview-image-shell.selected').forEach((selected) => {
+        if (selected !== shell) selected.classList.remove('selected');
+      });
+      shell.classList.add('selected');
+    };
+    image.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      select();
+    });
+    image.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        select();
+      }
+    });
+
+    let startX = 0;
+    let startWidth = 0;
+    let nextWidth = 0;
+    const resize = (clientX) => {
+      const maxWidth = Math.floor(elements.preview.getBoundingClientRect().width);
+      nextWidth = Math.round(Math.min(maxWidth, Math.max(80, startWidth + clientX - startX)));
+      shell.style.width = `${nextWidth}px`;
+      image.style.width = '100%';
+      size.textContent = `${nextWidth}px`;
+    };
+    handle.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      select();
+      startX = event.clientX;
+      startWidth = image.getBoundingClientRect().width;
+      nextWidth = Math.round(startWidth);
+      handle.setPointerCapture(event.pointerId);
+    });
+    handle.addEventListener('pointermove', (event) => {
+      if (!handle.hasPointerCapture(event.pointerId)) return;
+      resize(event.clientX);
+    });
+    handle.addEventListener('pointerup', (event) => {
+      if (!handle.hasPointerCapture(event.pointerId)) return;
+      handle.releasePointerCapture(event.pointerId);
+      commitPreviewImageWidth(image, nextWidth);
+    });
+    handle.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      select();
+      startX = 0;
+      startWidth = image.getBoundingClientRect().width;
+      resize(event.key === 'ArrowLeft' ? -10 : 10);
+      commitPreviewImageWidth(image, nextWidth);
+    });
+    reset.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      commitPreviewImageWidth(image, null);
+    });
+  }
 }
 
 const imageCache = new Map();
@@ -502,7 +646,8 @@ async function findUnusedAssetPath(kind, requestedName, reservedPaths = new Set(
 }
 
 async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set()) {
-  const content = await fileToBase64(file);
+  const preparedFile = await prepareAssetForUpload(kind, file);
+  const content = await fileToBase64(preparedFile);
   for (let attempt = 0; attempt < 5; attempt += 1) {
     const destination = await findUnusedAssetPath(kind, requestedName, reservedPaths);
     try {
@@ -512,7 +657,7 @@ async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set
         `Add ${kind.slice(0, -1)}: ${destination.name}`,
       );
       reservedPaths.add(destination.path);
-      cacheLocalImage(destination.path, file);
+      cacheLocalImage(destination.path, preparedFile);
       return destination;
     } catch (error) {
       // A concurrent upload can claim the name between the availability check and commit.
@@ -520,6 +665,21 @@ async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set
     }
   }
   throw new Error('The image name changed on GitHub while uploading. Please try again.');
+}
+
+async function prepareAssetForUpload(kind, file) {
+  if (kind !== 'diagrams' || !/\.svg$/i.test(file.name)) return file;
+  const svg = await file.text();
+  if (!svg.includes('svg-source:excalidraw')) return file;
+  const backgroundPattern = /<rect\b(?=[^>]*\bx="0(?:\.0+)?")(?=[^>]*\by="0(?:\.0+)?")(?=[^>]*\bfill="(?:#fff(?:fff)?|white)")[^>]*><\/rect>/i;
+  const transparent = svg.replace(backgroundPattern, (background) =>
+    background.replace(/\bfill="(?:#fff(?:fff)?|white)"/i, 'fill="none"'),
+  );
+  if (transparent === svg) return file;
+  return new File([transparent], file.name, {
+    type: 'image/svg+xml',
+    lastModified: file.lastModified,
+  });
 }
 
 function publicAssetUrl(path) {
@@ -533,6 +693,9 @@ async function hydratePreviewImages() {
     if (source.startsWith(`${BASE}assets/`)) path = `public/${source.slice(BASE.length)}`;
     else if (source.startsWith('../../assets/')) path = `src/${source.slice('../../'.length)}`;
     if (!path) continue;
+    if (path.includes('/assets/diagrams/') && /\.svg$/i.test(path)) {
+      image.classList.add('excalidraw-diagram');
+    }
 
     const pending = pendingAssets.get(path);
     if (pending) {
@@ -817,6 +980,9 @@ function setAssetFile(file) {
   const image = document.createElement('img');
   image.src = URL.createObjectURL(file);
   image.alt = '';
+  if (assetState.kind === 'diagrams' && /\.svg$/i.test(file.name)) {
+    image.classList.add('excalidraw-diagram');
+  }
   assetPreview.append(image);
   assetPreview.hidden = false;
   assetInsert.disabled = false;

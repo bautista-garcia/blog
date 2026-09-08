@@ -14,7 +14,7 @@ From there the editor works like a small, GitHub-backed writing app:
 - **Publishing metadata** — title, description, slug, date, tags, draft status, plus a raw field for additional frontmatter. `Cmd/Ctrl+S` publishes the change as a GitHub commit.
 - **Safe recovery and history** — unpublished work is recovered from browser storage. Published posts expose their Git commit history and any earlier version can be restored into the editor before republishing.
 - **Post management** — search the library, filter published posts and drafts, rename via the slug, create, export, or delete posts.
-- **Images & Excalidraw diagrams** — use the insert menu, or paste/drop directly into the editor. Excalidraw's copied SVG markup is recognized automatically. Files are committed to `public/assets/` and inserted at the cursor with optional alt text, width, and caption. Clipboard images receive unique names, and all uploads avoid replacing an existing asset.
+- **Images & Excalidraw diagrams** — use the insert menu, or paste/drop directly into the editor. Excalidraw's copied SVG markup is recognized automatically, its canvas is made transparent, and legacy drawings blend into either site theme. Resize any image by selecting it in preview and dragging the ↔ handle (arrow keys work too), or choose **Auto** to reset it. Files are committed to `public/assets/` with unique, collision-safe names.
 - **Import from Obsidian** — import a `.md` file with its images. `![[embeds]]`, `[[wikilinks]]`, frontmatter, widths, and captions are converted; missing files are reported before import.
 
 The editor code is deliberately split by responsibility so changes stay approachable:

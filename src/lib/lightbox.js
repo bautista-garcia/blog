@@ -10,6 +10,12 @@ function openLightbox(img) {
   const zoomed = document.createElement('img');
   zoomed.src = img.currentSrc || img.src;
   zoomed.alt = img.alt || '';
+  if (
+    img.classList.contains('excalidraw-diagram') ||
+    (img.getAttribute('src')?.includes('/assets/diagrams/') && /\.svg(?:$|[?#])/i.test(img.getAttribute('src')))
+  ) {
+    zoomed.classList.add('excalidraw-diagram');
+  }
   // The width attribute constrains the inline copy; the zoom should be free.
   // (fresh element — no width/height attributes are set)
   overlay.appendChild(zoomed);
