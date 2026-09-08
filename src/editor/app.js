@@ -101,7 +101,7 @@ let previewTimer = null;
 let recoveryTimer = null;
 let statusTimer = null;
 let pendingAssets = new Map();
-let assetState = { kind: 'images', file: null };
+let assetState = { kind: 'images', file: null, source: 'upload' };
 let importData = null;
 let importFiles = new Map();
 let syncingScroll = false;
@@ -189,19 +189,20 @@ function initMarkdownEditor() {
     onSelectionChange(selection) {
       updateStats(markdownEditor.getValue(), selection);
     },
-    onFiles(files) {
+    onFiles(files, source) {
       const file = files.find((candidate) =>
         candidate.type.startsWith('image/') || /\.svg$/i.test(candidate.name),
       );
       if (!file) return false;
-      openAssetDialog(/\.svg$/i.test(file.name) ? 'diagrams' : 'images', file);
+      openAssetDialog(/\.svg$/i.test(file.name) ? 'diagrams' : 'images', file, source);
       return true;
     },
     onSvgPaste(svg) {
-      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
       openAssetDialog(
         'diagrams',
         new File([svg], `diagram-${stamp}.svg`, { type: 'image/svg+xml' }),
+        'paste',
       );
     },
     onSlashCommand: openCommandDialog,
@@ -229,6 +230,7 @@ function initMarkdownEditor() {
 }
 
 function setDocument(values, body, options = {}) {
+  clearImageCache();
   loadingDocument = true;
   elements.title.value = values.title || '';
   elements.description.value = values.description || '';
@@ -459,6 +461,71 @@ const MIME = {
   avif: 'image/avif',
 };
 
+function clearImageCache() {
+  for (const value of imageCache.values()) {
+    if (value.startsWith('blob:')) URL.revokeObjectURL(value);
+  }
+  imageCache.clear();
+}
+
+function cacheLocalImage(path, file) {
+  const previous = imageCache.get(path);
+  if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
+  imageCache.set(path, URL.createObjectURL(file));
+}
+
+function suffixFilename(name, number) {
+  const extensionAt = name.lastIndexOf('.');
+  if (extensionAt <= 0) return `${name}-${number}`;
+  return `${name.slice(0, extensionAt)}-${number}${name.slice(extensionAt)}`;
+}
+
+function pastedAssetFilename(file, kind) {
+  const extension = file.name.match(/\.[a-z0-9]+$/i)?.[0].toLowerCase() || '.png';
+  const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
+  return `pasted-${kind === 'diagrams' ? 'diagram' : 'image'}-${stamp}${extension}`;
+}
+
+async function findUnusedAssetPath(kind, requestedName, reservedPaths = new Set()) {
+  for (let index = 0; index < 100; index += 1) {
+    const name = index ? suffixFilename(requestedName, index + 1) : requestedName;
+    const path = `public/assets/${kind}/${name}`;
+    if (reservedPaths.has(path)) continue;
+    try {
+      await client.getFile(path);
+    } catch (error) {
+      if (error.status === 404) return { name, path, renamed: name !== requestedName };
+      throw error;
+    }
+  }
+  throw new Error('Could not find an unused file name for this image.');
+}
+
+async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set()) {
+  const content = await fileToBase64(file);
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const destination = await findUnusedAssetPath(kind, requestedName, reservedPaths);
+    try {
+      await client.putFile(
+        destination.path,
+        content,
+        `Add ${kind.slice(0, -1)}: ${destination.name}`,
+      );
+      reservedPaths.add(destination.path);
+      cacheLocalImage(destination.path, file);
+      return destination;
+    } catch (error) {
+      // A concurrent upload can claim the name between the availability check and commit.
+      if (error.status !== 409 && error.status !== 422) throw error;
+    }
+  }
+  throw new Error('The image name changed on GitHub while uploading. Please try again.');
+}
+
+function publicAssetUrl(path) {
+  return `${BASE}${path.replace(/^public\//, '')}`;
+}
+
 async function hydratePreviewImages() {
   for (const image of elements.preview.querySelectorAll('img')) {
     const source = image.getAttribute('src') || '';
@@ -542,22 +609,29 @@ async function savePost() {
   try {
     if (pendingAssets.size) {
       let uploaded = 0;
+      const totalAssets = pendingAssets.size;
+      const reservedPaths = new Set();
+      let visibleBody = markdownEditor.getValue();
       for (const [assetPath, asset] of [...pendingAssets]) {
-        flashStatus(`Uploading image ${uploaded + 1} of ${pendingAssets.size}…`, '', 0);
-        let sha;
-        try {
-          sha = (await client.getFile(assetPath)).sha;
-        } catch (error) {
-          if (error.status !== 404) throw error;
+        flashStatus(`Uploading image ${uploaded + 1} of ${totalAssets}…`, '', 0);
+        const match = assetPath.match(/^public\/assets\/([^/]+)\/(.+)$/);
+        if (!match) throw new Error(`Unsupported asset path: ${assetPath}`);
+        const destination = await uploadNewAsset(match[1], asset, match[2], reservedPaths);
+        if (destination.path !== assetPath) {
+          const oldUrl = publicAssetUrl(assetPath);
+          const newUrl = publicAssetUrl(destination.path);
+          file.body = file.body.split(oldUrl).join(newUrl);
+          file.content = file.content.split(oldUrl).join(newUrl);
+          visibleBody = visibleBody.split(oldUrl).join(newUrl);
         }
-        await client.putFile(
-          assetPath,
-          await fileToBase64(asset),
-          `Add image: ${assetPath.split('/').pop()}`,
-          sha,
-        );
         pendingAssets.delete(assetPath);
         uploaded += 1;
+      }
+      if (visibleBody !== markdownEditor.getValue()) {
+        loadingDocument = true;
+        markdownEditor.setValue(visibleBody);
+        loadingDocument = false;
+        persistRecovery();
       }
     }
 
@@ -703,8 +777,8 @@ const assetPreview = $('asset-preview');
 const assetInsert = $('asset-insert');
 const assetError = $('asset-error');
 
-function openAssetDialog(kind, file = null) {
-  assetState = { kind, file: null };
+function openAssetDialog(kind, file = null, source = 'upload') {
+  assetState = { kind, file: null, source };
   $('asset-title').textContent = kind === 'diagrams' ? 'Insert an Excalidraw diagram' : 'Insert an image';
   $('asset-hint').textContent =
     kind === 'diagrams'
@@ -730,7 +804,14 @@ function setAssetFile(file) {
     return;
   }
   assetState.file = file;
-  assetName.value = sanitizeFilename(file.name);
+  const sanitizedName = sanitizeFilename(file.name);
+  const genericClipboardName = /^(?:image|clipboard|blob)(?:-\d+)?(?:\.[a-z0-9]+)?$/i.test(
+    sanitizedName,
+  );
+  assetName.value =
+    assetState.source === 'paste' && genericClipboardName
+      ? pastedAssetFilename(file, assetState.kind)
+      : sanitizedName;
   assetAlt.value ||= file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
   assetPreview.replaceChildren();
   const image = document.createElement('img');
@@ -752,19 +833,9 @@ async function insertAsset(event) {
     if (!/\.[a-z0-9]+$/i.test(name)) {
       name += assetState.file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.png';
     }
-    const path = `public/assets/${assetState.kind}/${name}`;
-    let sha;
-    try {
-      sha = (await client.getFile(path)).sha;
-    } catch (error) {
-      if (error.status !== 404) throw error;
-    }
-    await client.putFile(
-      path,
-      await fileToBase64(assetState.file),
-      `Add ${assetState.kind.slice(0, -1)}: ${name}`,
-      sha,
-    );
+    const destination = await uploadNewAsset(assetState.kind, assetState.file, name);
+    name = destination.name;
+    assetName.value = name;
     const width = assetWidth.value ? ` width="${Number(assetWidth.value)}"` : '';
     const alt = escapeAttribute(assetAlt.value.trim());
     const caption = escapeAttribute(assetCaption.value.trim());
@@ -773,7 +844,12 @@ async function insertAsset(event) {
       caption ? `<figure>\n${image}\n<figcaption>${caption}</figcaption>\n</figure>` : image,
     );
     assetDialog.close();
-    flashStatus('Image uploaded and inserted.', 'success');
+    flashStatus(
+      destination.renamed
+        ? `Image saved as ${name} so an existing asset was not replaced.`
+        : 'Image uploaded and inserted.',
+      'success',
+    );
   } catch (error) {
     assetError.textContent = error.message;
   } finally {
