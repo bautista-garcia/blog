@@ -1,0 +1,64 @@
+---
+title: "Inside an LLM Inference Engine: From Request to Response with MTLQwen"
+description: "What is it like to build an inference engine from scratch, which beats llama.cpp on Qwen 3.5."
+date: 2026-09-08
+tags: []
+draft: true
+---
+## What is an Inference Engine
+*What is an inference engine, why is it needed. Huge catch up phrase for the reader to stay interested.*
+
+A definition I use for inference engines is that they are the orchestration layer of the complete LLM workflow. They handle the memory LLMs need, whether in permanent buffers, such as weights, or “temporary” ones, such as caches. They also handle the compute an LLM performs by orchestrating the execution of all its kernels. Finally, they make it possible to run this workflow for multiple requests concurrently, extracting more performance from these models.
+
+
+## Why I built MTLQwen?
+*Explain what type of inference engine is MTLQwen and what constraints does it have (device, model, memory). What am I looking for by building this? , what can you optimize here that will bring more performance to the table?*
+
+MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 architectures, focusing on Metal backend for Apple GPUs. It started as a project to learn how inference engines work, but as I went deeper, I realized that specializing it for Qwen and Metal could provide more performance than general-purpose inference engines (vLLM or llama.cpp) on this specific model family and hardware. By using Metal specific features and optimizing Qwen’s kernels, MTLQwen ended up outperforming llama.cpp at both batch size 1 and in aggregate throughput, with a further 30% speedup when using DFlash.
+
+
+## Following one batch through MTLQwen
+
+### Model load & Compilation
+*Here I could talk about the mmap, how it chooses the kernels each linear will run based on the shape and quant dtype of the weights and how it builds the RoPE tables.*
+
+### A Request Becomes a Sequence
+*Explain what responsibilities I hand to the frontend. In this case it could be a simple multiturn chat or a tui. How they should apply chat template, concat multiturn and tokenize. How it can track the request progress with len(cursor) vs len(request). Make a good descripion of sequence/slots and every piece of state it owns, what does it mean, and what it can derive from it.*
+
+The engine can receive requests from many kinds of frontends, whether they come from a multi-turn chat, an agentic TUI, or any other interface. The frontend is responsible for applying the model’s chat template and concatenating the conversation’s messages:
+
+<figure>
+<img src="/blog/assets/images/image.png" alt="image" />
+<figcaption>multiturn chat</figcaption>
+</figure>
+
+The resulting text is then [tokenized](https://platform.openai.com/tokenizer), producing the token IDs that are ready to enter the inference engine.
+
+
+### Prefix Cache lookup
+*How the engine performs a prefix cache lookup in order to restore previously computed state from a matching prefix.*
+### The Scheduler Forms a Batch
+*How the scheduler grabs pending computation from multiple sequences to form a batch. How there is a scheduling policy which favors a metric in this case, but how it could favor others. What are the constraints here?*
+### Sparse K/V Memory Is Reserved
+*How the KV allocator does the corresponding physical mapping allocation now, only for the touched ranges, when each sequence needs it. Link to a Sparse Buffer deep dive.*
+### The Drafter Proposes Tokens
+*How are drafter inputs packed to run in a single drafter forward pass. Probably put an image of the DFLASH architecture and showing how anchor, mask, mask, mask, anchor, mask, ... enter the packed batch*.
+
+### Inputs Are Packed for the GPU
+*How normal prompt processing tokens are put together with the drafter's proposals and how can we tell the GPU to differentiate tokens from each sequence (masking & batch attn)*.
+
+### The Target Model Runs
+*Image of the Qwen 3.5 architecture, saying that here you have the possibility to tune how the model run as much as you want. You can fuse and optimize layers, because the engine owns the kernels.*
+
+### State is injected to the drafter
+*How do we inject the target's state into the drafter.*
+
+### Tokens and State Are Committed
+*How do we compare drafter vs targets, how this will be improved in the future (by removing greedy argmax). And what happens on a commit, how do we copy state from candidates buffer into the GDN state (why do we need this candidates state?) each slot owns and how does the frontend know that its request is ready to be streamed. Prefix publication once 512 token boundary is reached.* 
+
+## Design Tradeoffs and Current Limitations
+
+## Appendix A: Sparse Buffers
+## Appendix B: Speculative Decoding
+## Appendix C: Batched Attention
+## Appendix D: Linear Attention
