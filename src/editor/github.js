@@ -26,18 +26,24 @@ export function createClient({ token, owner, repo, branch }) {
   }
 
   const repoPath = `/repos/${owner}/${repo}`;
+  const contentPath = (path) => `${repoPath}/contents/${path.split('/').map(encodeURIComponent).join('/')}`;
 
   return {
     /** Cheap auth/permission check. */
     test: () => request(repoPath),
 
-    listPosts: () => request(`${repoPath}/contents/src/content/posts?ref=${branch}`),
+    listPosts: () => request(`${repoPath}/contents/src/content/posts?ref=${encodeURIComponent(branch)}`),
 
-    getFile: (path) => request(`${repoPath}/contents/${path}?ref=${branch}`),
+    getFile: (path, ref = branch) => request(`${contentPath(path)}?ref=${encodeURIComponent(ref)}`),
+
+    listCommits: (path) =>
+      request(
+        `${repoPath}/commits?path=${encodeURIComponent(path)}&sha=${encodeURIComponent(branch)}&per_page=20`,
+      ),
 
     /** Create or update a file. Pass `sha` to update an existing file. */
     putFile: (path, contentBase64, message, sha) =>
-      request(`${repoPath}/contents/${path}`, {
+      request(contentPath(path), {
         method: 'PUT',
         body: JSON.stringify({
           message,
@@ -48,7 +54,7 @@ export function createClient({ token, owner, repo, branch }) {
       }),
 
     deleteFile: (path, message, sha) =>
-      request(`${repoPath}/contents/${path}`, {
+      request(contentPath(path), {
         method: 'DELETE',
         body: JSON.stringify({ message, sha, branch }),
       }),

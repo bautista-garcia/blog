@@ -1,224 +1,454 @@
-import { marked } from 'marked';
-import katex from 'katex';
-import { createClient, textToBase64, base64ToText, fileToBase64 } from './github.js';
+import { base64ToText, createClient, fileToBase64, textToBase64 } from './github.js';
+import { createCommandPalette } from './command-palette.js';
+import {
+  clearRecovery,
+  getPreference,
+  loadRecovery,
+  saveRecovery,
+  setPreference,
+} from './storage.js';
 
-/* ------------------------------------------------------------------ *
- * Config + state
- * ------------------------------------------------------------------ */
-const root = document.getElementById('editor');
-const cfg = root.dataset; // owner, repo, branch, base
-const BASE = cfg.base.replace(/\/?$/, '/'); // BASE_URL may lack the trailing slash
+let createMarkdownEditor;
+let buildFile;
+let escapeAttribute;
+let getOutline;
+let getWritingStats;
+let renderMarkdown;
+let sanitizeFilename;
+let slugify;
+let splitFrontmatter;
+let today;
+let validateMdxBody;
+let prepareObsidianImport;
 
+async function loadEditorModules() {
+  if (createMarkdownEditor) return;
+  const [editorModule, markdownModule, obsidianModule] = await Promise.all([
+    import('./codemirror.js'),
+    import('./markdown.js'),
+    import('./obsidian.js'),
+  ]);
+  createMarkdownEditor = editorModule.createMarkdownEditor;
+  prepareObsidianImport = obsidianModule.prepareObsidianImport;
+  ({
+    buildFile,
+    escapeAttribute,
+    getOutline,
+    getWritingStats,
+    renderMarkdown,
+    sanitizeFilename,
+    slugify,
+    splitFrontmatter,
+    today,
+    validateMdxBody,
+  } = markdownModule);
+}
+
+const $ = (id) => document.getElementById(id);
+const root = $('editor');
+const cfg = root.dataset;
+const BASE = cfg.base.replace(/\/?$/, '/');
 const LS_TOKEN = 'blog-editor:token';
 const LS_REPO = 'blog-editor:repo';
 
+const elements = {
+  gate: $('gate'),
+  gateForm: $('gate-form'),
+  gateOwner: $('gate-owner'),
+  gateRepo: $('gate-repo'),
+  gateToken: $('gate-token'),
+  gateError: $('gate-error'),
+  app: $('app'),
+  status: $('status'),
+  currentLabel: $('current-label'),
+  repoLabel: $('repo-label'),
+  postCount: $('post-count'),
+  list: $('post-list'),
+  search: $('post-search'),
+  title: $('f-title'),
+  description: $('f-desc'),
+  slug: $('f-slug'),
+  date: $('f-date'),
+  tags: $('f-tags'),
+  draft: $('f-draft'),
+  extra: $('f-extra'),
+  save: $('btn-save'),
+  delete: $('btn-delete'),
+  panes: $('panes'),
+  sourcePane: $('source-pane'),
+  previewPane: $('preview-pane'),
+  preview: $('preview'),
+  outline: $('outline'),
+  outlineCount: $('outline-count'),
+  saveState: $('save-state'),
+  localState: $('local-state'),
+  wordCount: $('word-count'),
+  characterCount: $('character-count'),
+  readTime: $('read-time'),
+  selectionCount: $('selection-count'),
+};
+
 let client = null;
-let posts = []; // { name, path, sha, raw, meta }
-let current = null; // { path, sha, filename }
+let connectedRepo = `${cfg.owner}/${cfg.repo}`;
+let posts = [];
+let current = null;
 let dirty = false;
-let modal = { kind: 'images', file: null };
-let pendingAssets = new Map(); // repo path -> File, uploaded on save (Obsidian import)
-let newExt = '.mdx'; // extension for the next new post ('.md' for Obsidian imports)
+let loadingDocument = false;
+let newExtension = '.mdx';
+let markdownEditor = null;
+let listFilter = 'all';
+let previewTimer = null;
+let recoveryTimer = null;
+let statusTimer = null;
+let pendingAssets = new Map();
+let assetState = { kind: 'images', file: null };
+let importData = null;
+let importFiles = new Map();
+let syncingScroll = false;
 
-/* ------------------------------------------------------------------ *
- * DOM refs
- * ------------------------------------------------------------------ */
-const $ = (id) => document.getElementById(id);
-const gate = $('gate');
-const app = $('app');
-const statusEl = $('status');
-const listEl = $('post-list');
-const titleEl = $('f-title');
-const descEl = $('f-desc');
-const slugEl = $('f-slug');
-const dateEl = $('f-date');
-const tagsEl = $('f-tags');
-const draftEl = $('f-draft');
-const bodyEl = $('body');
-const previewEl = $('preview');
-const panesEl = $('panes');
-const saveBtn = $('btn-save');
-const deleteBtn = $('btn-delete');
-
-/* ------------------------------------------------------------------ *
- * Small utilities
- * ------------------------------------------------------------------ */
-function setStatus(msg, isError = false) {
-  statusEl.textContent = msg;
-  statusEl.classList.toggle('error', isError);
-  if (msg && !isError) setTimeout(() => statusEl.textContent === msg && (statusEl.textContent = ''), 5000);
+function flashStatus(message, type = '', timeout = 4500) {
+  clearTimeout(statusTimer);
+  elements.status.textContent = message;
+  elements.status.className = `status-message ${type}`.trim();
+  if (message && timeout) {
+    statusTimer = window.setTimeout(() => {
+      if (elements.status.textContent === message) elements.status.textContent = '';
+    }, timeout);
+  }
 }
 
-function slugify(s) {
-  return s
-    .toLowerCase()
-    .normalize('NFKD')
-    .replace(/[̀-ͯ]/g, '')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 80);
+function setSyncState(state, label) {
+  elements.saveState.dataset.state = state;
+  elements.saveState.lastChild.textContent = ` ${label}`;
 }
 
-function sanitizeFilename(name) {
-  return name.toLowerCase().replace(/[^a-z0-9.]+/g, '-').replace(/-+/g, '-');
+function recoveryKey() {
+  return current?.path || '__new__';
 }
 
-function today() {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function snapshot() {
+  return {
+    title: elements.title.value,
+    description: elements.description.value,
+    slug: elements.slug.value,
+    date: elements.date.value,
+    tags: elements.tags.value,
+    draft: elements.draft.checked,
+    extra: elements.extra.value,
+    body: markdownEditor?.getValue() || '',
+    baseSha: current?.sha || null,
+    extension: current?.filename.match(/\.(md|mdx)$/)?.[0] || newExtension,
+  };
+}
+
+function persistRecovery() {
+  clearTimeout(recoveryTimer);
+  recoveryTimer = window.setTimeout(() => {
+    if (!dirty) return;
+    saveRecovery(connectedRepo, recoveryKey(), snapshot());
+    elements.localState.textContent = `Local recovery · ${new Date().toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    })}`;
+  }, 700);
 }
 
 function markDirty() {
+  if (loadingDocument) return;
   dirty = true;
+  setSyncState('dirty', 'Unpublished changes');
+  persistRecovery();
 }
 
-/* ------------------------------------------------------------------ *
- * Frontmatter: parse + serialize (known keys, rest preserved verbatim)
- * ------------------------------------------------------------------ */
-function splitFrontmatter(raw) {
-  const m = raw.match(/^---\n([\s\S]*?)\n---\n?/);
-  if (!m) return { data: {}, extra: '', body: raw };
-  const data = {};
-  const extra = [];
-  const lines = m[1].split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    let mm;
-    if ((mm = line.match(/^title:\s*(.*)$/))) data.title = unquote(mm[1]);
-    else if ((mm = line.match(/^description:\s*(.*)$/))) data.description = unquote(mm[1]);
-    else if ((mm = line.match(/^date:\s*(.*)$/))) data.date = unquote(mm[1]).slice(0, 10);
-    else if ((mm = line.match(/^draft:\s*(.*)$/))) data.draft = mm[1].trim() === 'true';
-    else if ((mm = line.match(/^tags:\s*\[(.*)\]\s*$/))) {
-      data.tags = mm[1].split(',').map((s) => s.trim()).filter(Boolean);
-    } else if (line.match(/^tags:\s*$/) && lines[i + 1]?.match(/^\s+-\s/)) {
-      data.tags = [];
-      while (lines[i + 1]?.match(/^\s+-\s/)) {
-        data.tags.push(lines[++i].replace(/^\s+-\s*/, '').trim());
-      }
-    } else if ((mm = line.match(/^tags:\s+(.+)$/))) {
-      // Obsidian-style: `tags: foo, bar` (no brackets)
-      data.tags = mm[1].split(',').map((s) => s.trim().replace(/^#/, '')).filter(Boolean);
-    } else extra.push(line);
+function canLeaveDocument() {
+  if (!dirty) return true;
+  const confirmed = window.confirm('Leave this post? Your unpublished changes are saved locally.');
+  if (confirmed) saveRecovery(connectedRepo, recoveryKey(), snapshot());
+  return confirmed;
+}
+
+function updateStats(source, selection = '') {
+  const stats = getWritingStats(source);
+  elements.wordCount.textContent = `${stats.words} ${stats.words === 1 ? 'word' : 'words'}`;
+  elements.characterCount.textContent = `${stats.characters.toLocaleString()} characters`;
+  elements.readTime.textContent = `${stats.minutes} min read`;
+  const selectionWords = getWritingStats(selection).words;
+  elements.selectionCount.hidden = selectionWords === 0;
+  elements.selectionCount.textContent = `${selectionWords} selected`;
+}
+
+function initMarkdownEditor() {
+  if (markdownEditor) return;
+  markdownEditor = createMarkdownEditor($('editor-host'), {
+    onSave: savePost,
+    onChange(source) {
+      if (!loadingDocument) markDirty();
+      updateStats(source);
+      schedulePreview();
+    },
+    onSelectionChange(selection) {
+      updateStats(markdownEditor.getValue(), selection);
+    },
+    onFiles(files) {
+      const file = files.find((candidate) =>
+        candidate.type.startsWith('image/') || /\.svg$/i.test(candidate.name),
+      );
+      if (!file) return false;
+      openAssetDialog(/\.svg$/i.test(file.name) ? 'diagrams' : 'images', file);
+      return true;
+    },
+    onSvgPaste(svg) {
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
+      openAssetDialog(
+        'diagrams',
+        new File([svg], `diagram-${stamp}.svg`, { type: 'image/svg+xml' }),
+      );
+    },
+    onSlashCommand: openCommandDialog,
+  });
+
+  markdownEditor.view.scrollDOM.addEventListener('scroll', () => {
+    if (elements.panes.dataset.mode !== 'split' || syncingScroll) return;
+    syncingScroll = true;
+    const source = markdownEditor.view.scrollDOM;
+    const sourceRange = source.scrollHeight - source.clientHeight;
+    const previewRange = elements.previewPane.scrollHeight - elements.previewPane.clientHeight;
+    if (sourceRange > 0) elements.previewPane.scrollTop = (source.scrollTop / sourceRange) * previewRange;
+    requestAnimationFrame(() => (syncingScroll = false));
+  });
+
+  elements.previewPane.addEventListener('scroll', () => {
+    if (elements.panes.dataset.mode !== 'split' || syncingScroll) return;
+    syncingScroll = true;
+    const source = markdownEditor.view.scrollDOM;
+    const sourceRange = source.scrollHeight - source.clientHeight;
+    const previewRange = elements.previewPane.scrollHeight - elements.previewPane.clientHeight;
+    if (previewRange > 0) source.scrollTop = (elements.previewPane.scrollTop / previewRange) * sourceRange;
+    requestAnimationFrame(() => (syncingScroll = false));
+  });
+}
+
+function setDocument(values, body, options = {}) {
+  loadingDocument = true;
+  elements.title.value = values.title || '';
+  elements.description.value = values.description || '';
+  elements.slug.value = values.slug || '';
+  elements.date.value = values.date || today();
+  elements.tags.value = Array.isArray(values.tags) ? values.tags.join(', ') : values.tags || '';
+  elements.draft.checked = values.draft ?? true;
+  elements.extra.value = values.extra || '';
+  markdownEditor.setValue((body || '').replace(/^\n+/, ''));
+  loadingDocument = false;
+
+  elements.slug.dataset.touched = values.slug ? '1' : '';
+  elements.currentLabel.textContent = values.title || 'Untitled';
+  dirty = !!options.dirty;
+  setSyncState(dirty ? 'dirty' : 'saved', dirty ? 'Recovered local changes' : 'Synced with GitHub');
+  elements.localState.textContent = options.recovered ? 'Recovered from this browser' : '';
+  updateStats(markdownEditor.getValue());
+  renderPreview();
+}
+
+function recoveryDifferences(recovery, remote, body) {
+  const normalize = (value) => String(value ?? '').trim();
+  const differences = [];
+  if (normalize(recovery.title) !== normalize(remote.title)) differences.push('title');
+  if (normalize(recovery.description) !== normalize(remote.description)) differences.push('description');
+  if (normalize(recovery.slug) !== normalize(remote.slug)) differences.push('slug');
+  if (normalize(recovery.date) !== normalize(remote.date || today())) differences.push('date');
+  if (normalize(recovery.tags) !== normalize((remote.tags || []).join(', '))) differences.push('tags');
+  if (Boolean(recovery.draft) !== Boolean(remote.draft)) differences.push('draft');
+  if (normalize(recovery.extra) !== normalize(remote.extra)) differences.push('extra');
+  if (normalize(recovery.body) !== normalize(body)) differences.push('body');
+  return differences;
+}
+
+function renderPostList() {
+  const query = elements.search.value.trim().toLowerCase();
+  const visible = posts.filter((post) => {
+    if (listFilter === 'draft' && !post.meta.draft) return false;
+    if (listFilter === 'published' && post.meta.draft) return false;
+    if (!query) return true;
+    return [post.meta.title, post.meta.description, post.name, ...(post.meta.tags || [])]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(query));
+  });
+
+  elements.postCount.textContent = posts.length;
+  elements.list.replaceChildren();
+  if (!visible.length) {
+    const empty = document.createElement('li');
+    empty.className = 'empty-library';
+    empty.textContent = posts.length ? 'No posts match this view.' : 'Your first post starts here.';
+    elements.list.append(empty);
+    return;
   }
-  return { data, extra: extra.join('\n').trim(), body: raw.slice(m[0].length) };
+
+  for (const post of visible) {
+    const item = document.createElement('li');
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `library-item${post.meta.draft ? ' draft' : ''}${
+      current?.path === post.path ? ' active' : ''
+    }`;
+    button.setAttribute('aria-current', current?.path === post.path ? 'page' : 'false');
+
+    const state = document.createElement('span');
+    state.className = 'post-state';
+    state.title = post.meta.draft ? 'Draft' : 'Published';
+    const info = document.createElement('span');
+    info.className = 'post-info';
+    const title = document.createElement('span');
+    title.className = 'post-title';
+    title.textContent = post.meta.title || post.name;
+    const meta = document.createElement('span');
+    meta.className = 'post-meta';
+    const date = post.meta.date
+      ? new Date(`${post.meta.date}T12:00:00`).toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric',
+        })
+      : 'No date';
+    meta.textContent = `${date}${post.meta.tags?.length ? ` · ${post.meta.tags.slice(0, 2).join(', ')}` : ''}`;
+    info.append(title, meta);
+    button.append(state, info);
+    button.addEventListener('click', () => openPost(post));
+    item.append(button);
+    elements.list.append(item);
+  }
 }
 
-function unquote(s) {
-  const t = s.trim();
-  return (t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))
-    ? t.slice(1, -1)
-    : t;
+async function refreshPosts({ selectInitial = false } = {}) {
+  elements.list.innerHTML = '<li class="empty-library">Loading your library…</li>';
+  try {
+    const items = await client.listPosts();
+    const files = items.filter((item) => item.type === 'file' && /\.(md|mdx)$/.test(item.name));
+    posts = await Promise.all(
+      files.map(async (item) => {
+        const file = await client.getFile(item.path);
+        const raw = base64ToText(file.content);
+        return { name: item.name, path: item.path, sha: file.sha, raw, meta: splitFrontmatter(raw).data };
+      }),
+    );
+    posts.sort((left, right) => (right.meta.date || '').localeCompare(left.meta.date || ''));
+    renderPostList();
+    if (selectInitial) {
+      const recoveredNewPost = loadRecovery(connectedRepo, '__new__');
+      if (recoveredNewPost) newPost({ force: true, recovery: recoveredNewPost });
+      else if (posts[0]) openPost(posts[0], { force: true });
+      else newPost({ force: true });
+    }
+  } catch (error) {
+    if (error.status === 401) {
+      localStorage.removeItem(LS_TOKEN);
+      location.reload();
+      return;
+    }
+    elements.list.innerHTML = '<li class="empty-library">The library could not be loaded.</li>';
+    flashStatus(error.message, 'error', 0);
+  }
 }
 
-function quoteIfNeeded(s) {
-  return /[:#"'\[\]{}&*?]|^\s|\s$/.test(s) ? `"${s.replace(/"/g, '\\"')}"` : s;
+function openPost(post, { force = false } = {}) {
+  if (!force && !canLeaveDocument()) return;
+  clearTimeout(recoveryTimer);
+  pendingAssets = new Map();
+  const { data, extra, body } = splitFrontmatter(post.raw);
+  current = { path: post.path, sha: post.sha, filename: post.name };
+  newExtension = post.name.match(/\.(md|mdx)$/)?.[0] || '.mdx';
+  const recovery = loadRecovery(connectedRepo, post.path);
+  const remote = {
+    title: data.title,
+    description: data.description,
+    slug: post.name.replace(/\.(md|mdx)$/, ''),
+    date: data.date,
+    tags: data.tags || [],
+    draft: !!data.draft,
+    extra,
+  };
+  const recoveryDifferencesList = recovery ? recoveryDifferences(recovery, remote, body) : [];
+  const canRecover =
+    recovery &&
+    (!recovery.baseSha || recovery.baseSha === post.sha) &&
+    recoveryDifferencesList.length;
+
+  if (canRecover) {
+    setDocument(recovery, recovery.body, { dirty: true, recovered: true });
+    newExtension = recovery.extension || newExtension;
+    flashStatus('Recovered unpublished changes from this browser.', 'success');
+  } else {
+    if (recovery) clearRecovery(connectedRepo, post.path);
+    setDocument(remote, body);
+  }
+
+  elements.delete.hidden = false;
+  renderPostList();
+  closeSidebar();
+  markdownEditor.focus();
 }
 
-function buildFile({ title, description, date, tags, draft, extra, body }) {
-  const fm = ['---', `title: ${quoteIfNeeded(title)}`];
-  if (description) fm.push(`description: ${quoteIfNeeded(description)}`);
-  fm.push(`date: ${date}`, `tags: [${tags.join(', ')}]`, `draft: ${draft ? 'true' : 'false'}`);
-  if (extra) fm.push(extra);
-  fm.push('---', '');
-  return fm.join('\n') + body.replace(/^\n+/, '');
+function newPost({ force = false, recovery = null } = {}) {
+  if (!force && !canLeaveDocument()) return false;
+  clearTimeout(recoveryTimer);
+  pendingAssets = new Map();
+  newExtension = recovery?.extension || '.mdx';
+  current = null;
+  if (recovery) {
+    setDocument(recovery, recovery.body, { dirty: true, recovered: true });
+    flashStatus('Recovered your unpublished post.', 'success');
+  } else {
+    setDocument(
+      { title: '', description: '', slug: '', date: today(), tags: [], draft: true, extra: '' },
+      '',
+    );
+  }
+  elements.delete.hidden = true;
+  renderPostList();
+  closeSidebar();
+  elements.title.focus();
+  return true;
 }
 
-/* ------------------------------------------------------------------ *
- * Textarea editing helpers
- * ------------------------------------------------------------------ */
-function wrapSelection(before, after, placeholder = '') {
-  const { selectionStart: s, selectionEnd: e, value } = bodyEl;
-  const sel = value.slice(s, e) || placeholder;
-  bodyEl.value = value.slice(0, s) + before + sel + after + value.slice(e);
-  bodyEl.focus();
-  bodyEl.setSelectionRange(s + before.length, s + before.length + sel.length);
-  markDirty();
-  schedulePreview();
+function renderOutline() {
+  const headings = getOutline(markdownEditor.getValue());
+  elements.outlineCount.textContent = headings.length || '';
+  elements.outline.replaceChildren();
+  if (!headings.length) {
+    const empty = document.createElement('p');
+    empty.className = 'outline-empty';
+    empty.textContent = 'Add a heading to build the outline.';
+    elements.outline.append(empty);
+    return;
+  }
+  headings.forEach((heading) => {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.level = Math.min(heading.level, 3);
+    button.textContent = heading.label;
+    button.title = `Line ${heading.line}`;
+    button.addEventListener('click', () => markdownEditor.goToLine(heading.line));
+    elements.outline.append(button);
+  });
 }
 
-function wrapBlock(open, close) {
-  const { selectionStart: s, selectionEnd: e, value } = bodyEl;
-  const sel = value.slice(s, e);
-  const block = `${open}\n${sel}\n${close}`;
-  bodyEl.value = value.slice(0, s) + block + value.slice(e);
-  bodyEl.focus();
-  bodyEl.setSelectionRange(s + open.length + 1, s + open.length + 1 + sel.length);
-  markDirty();
-  schedulePreview();
-}
-
-function insertBlock(text) {
-  const { selectionStart: s, value } = bodyEl;
-  const before = value.slice(0, s).replace(/\n{0,2}$/, '\n\n');
-  const after = value.slice(s).replace(/^\n{0,2}/, '\n\n');
-  bodyEl.value = before + text + after;
-  bodyEl.focus();
-  markDirty();
-  schedulePreview();
-}
-
-const toolbarActions = {
-  bold: () => wrapSelection('**', '**', 'bold'),
-  italic: () => wrapSelection('*', '*', 'italic'),
-  h2: () => wrapSelection('\n## ', '\n', 'Heading'),
-  link: () => wrapSelection('[', '](https://)', 'link text'),
-  icode: () => wrapSelection('`', '`', 'code'),
-  codeblock: () => wrapBlock('```', '```'),
-  math: () => {
-    const sel = bodyEl.value.slice(bodyEl.selectionStart, bodyEl.selectionEnd);
-    if (sel.includes('\n') || sel.length > 60 || !sel) wrapBlock('$$', '$$');
-    else wrapSelection('$', '$');
-  },
-  sidenote: () => wrapSelection('<Sidenote>', '</Sidenote>', 'note text'),
-  image: () => openModal('images'),
-  diagram: () => openModal('diagrams'),
-};
-
-/* ------------------------------------------------------------------ *
- * Preview (approximation: marked + KaTeX; sidenotes shown inline)
- * ------------------------------------------------------------------ */
-let previewTimer = null;
 function schedulePreview() {
-  if (previewEl.hidden) return;
   clearTimeout(previewTimer);
-  previewTimer = setTimeout(renderPreview, 250);
+  previewTimer = window.setTimeout(renderPreview, 180);
 }
 
 function renderPreview() {
-  let src = bodyEl.value.replace(/^import .*$/gm, '');
-  src = src.replace(/<Sidenote>([\s\S]*?)<\/Sidenote>/g, (_, n) => `<span class="pv-sn">${n}</span>`);
-
-  // Extract math BEFORE marked runs, otherwise Markdown mangles formulas
-  // (e.g. underscores in x_tile become <em>). Fenced code blocks are left
-  // untouched. Rendered KaTeX is substituted back into the HTML at the end.
-  const math = [];
-  const stash = (source, displayMode) => {
-    math.push(katex.renderToString(source, { displayMode, throwOnError: false }));
-    return `XQMATHX${math.length - 1}XQ`;
-  };
-  const extractMath = (s) =>
-    s
-      .replace(/\$\$([\s\S]+?)\$\$/g, (_, m) => stash(m, true))
-      .replace(/\$([^$\n]+?)\$/g, (_, m) => stash(m, false));
-
-  const processed = src
-    .split(/(```[\s\S]*?```)/)
-    .map((part, i) => (i % 2 === 1 ? part : extractMath(part)))
-    .join('');
-
-  let html = marked.parse(processed);
-  html = html.replace(/XQMATHX(\d+)XQ/g, (_, i) => math[Number(i)]);
-  previewEl.innerHTML = html;
+  if (!markdownEditor) return;
+  elements.preview.innerHTML = renderMarkdown(markdownEditor.getValue());
+  elements.preview.querySelectorAll('a[href^="http"]').forEach((link) => {
+    link.target = '_blank';
+    link.rel = 'noopener';
+  });
+  renderOutline();
   hydratePreviewImages();
 }
 
-/* ------------------------------------------------------------------ *
- * Preview images: repo files can't be reached from the editor (private
- * repo, or not pulled locally), so fetch them via the API as data URLs.
- * Handles both editor uploads ({base}assets/…) and pipeline images
- * (../../assets/…).
- * ------------------------------------------------------------------ */
-const imgCache = new Map(); // repo path -> data URL
+const imageCache = new Map();
 const MIME = {
   svg: 'image/svg+xml',
   png: 'image/png',
@@ -230,668 +460,716 @@ const MIME = {
 };
 
 async function hydratePreviewImages() {
-  for (const img of previewEl.querySelectorAll('img')) {
-    const src = img.getAttribute('src') || '';
+  for (const image of elements.preview.querySelectorAll('img')) {
+    const source = image.getAttribute('src') || '';
     let path = null;
-    if (src.startsWith(`${BASE}assets/`)) path = `public/${src.slice(BASE.length)}`;
-    else if (src.startsWith('../../assets/')) path = `src/${src.slice('../../'.length)}`;
+    if (source.startsWith(`${BASE}assets/`)) path = `public/${source.slice(BASE.length)}`;
+    else if (source.startsWith('../../assets/')) path = `src/${source.slice('../../'.length)}`;
     if (!path) continue;
-    // Imported but not yet saved: the file only exists in browser memory.
+
     const pending = pendingAssets.get(path);
     if (pending) {
-      if (!imgCache.has(path)) imgCache.set(path, URL.createObjectURL(pending));
-      img.src = imgCache.get(path);
+      if (!imageCache.has(path)) imageCache.set(path, URL.createObjectURL(pending));
+      image.src = imageCache.get(path);
       continue;
     }
-    const cached = imgCache.get(path);
-    if (cached) {
-      img.src = cached;
+    if (imageCache.has(path)) {
+      image.src = imageCache.get(path);
       continue;
     }
     try {
       const file = await client.getFile(path);
       const mime = MIME[path.split('.').pop().toLowerCase()] || 'application/octet-stream';
       const url = `data:${mime};base64,${file.content.replace(/\n/g, '')}`;
-      imgCache.set(path, url);
-      img.src = url;
+      imageCache.set(path, url);
+      image.src = url;
     } catch {
-      /* not in the repo — leave the src as-is */
+      // Leave unresolved images untouched; their path remains useful for editing.
     }
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Post list
- * ------------------------------------------------------------------ */
-async function refreshList() {
-  listEl.innerHTML = '<li class="muted">Loading…</li>';
-  try {
-    const items = await client.listPosts();
-    const files = items.filter((i) => i.type === 'file' && /\.(md|mdx)$/.test(i.name));
-    posts = await Promise.all(
-      files.map(async (f) => {
-        const file = await client.getFile(f.path);
-        const raw = base64ToText(file.content);
-        return { name: f.name, path: f.path, sha: file.sha, raw, meta: splitFrontmatter(raw).data };
-      }),
-    );
-    posts.sort((a, b) => (b.meta.date || '').localeCompare(a.meta.date || ''));
-    listEl.innerHTML = '';
-    for (const p of posts) {
-      const li = document.createElement('li');
-      const btn = document.createElement('button');
-      btn.className = 'post-item' + (current?.path === p.path ? ' active' : '');
-      btn.innerHTML = `<span class="t"></span><span class="f"></span>`;
-      btn.querySelector('.t').textContent = p.meta.title || p.name;
-      btn.querySelector('.f').textContent = p.name + (p.meta.draft ? ' · draft' : '');
-      btn.onclick = () => openPost(p);
-      li.appendChild(btn);
-      listEl.appendChild(li);
-    }
-    if (!posts.length) listEl.innerHTML = '<li class="muted">No posts yet</li>';
-  } catch (e) {
-    if (e.status === 401) {
-      localStorage.removeItem(LS_TOKEN); // token revoked/expired — back to the gate
-      location.reload();
-      return;
-    }
-    listEl.innerHTML = '<li class="muted">Failed to load</li>';
-    setStatus(e.message, true);
-  }
-}
-
-function openPost(p) {
-  if (dirty && !confirm('Discard unsaved changes?')) return;
-  pendingAssets = new Map(); // abandon any import uploads not yet saved
-  const { data, extra, body } = splitFrontmatter(p.raw);
-  current = { path: p.path, sha: p.sha, filename: p.name, extra };
-  titleEl.value = data.title || '';
-  descEl.value = data.description || '';
-  slugEl.value = p.name.replace(/\.(md|mdx)$/, '');
-  dateEl.value = data.date || today();
-  tagsEl.value = (data.tags || []).join(', ');
-  draftEl.checked = !!data.draft;
-  bodyEl.value = body.replace(/^\n+/, '');
-  deleteBtn.hidden = false;
-  dirty = false;
-  setStatus(`Opened ${p.name}`);
-  schedulePreview();
-  bodyEl.focus();
-}
-
-function newPost() {
-  if (dirty && !confirm('Discard unsaved changes?')) return;
-  pendingAssets = new Map();
-  newExt = '.mdx';
-  current = null;
-  titleEl.value = '';
-  descEl.value = '';
-  slugEl.value = '';
-  slugEl.disabled = false;
-  dateEl.value = today();
-  tagsEl.value = '';
-  draftEl.checked = true;
-  bodyEl.value = '';
-  deleteBtn.hidden = true;
-  dirty = false;
-  listEl.querySelectorAll('.post-item.active').forEach((b) => b.classList.remove('active'));
-  titleEl.focus();
-}
-
-/* ------------------------------------------------------------------ *
- * Save / delete
- * ------------------------------------------------------------------ */
-async function save() {
-  const title = titleEl.value.trim();
-  const date = dateEl.value;
-  if (!title) return setStatus('Title is required', true);
-  if (!date) return setStatus('Date is required', true);
-
-  const slug = slugify(slugEl.value || title);
-  if (!slug) return setStatus('Slug is required', true);
-  // Editing keeps the post's extension; changing the slug renames the file.
-  const ext = current?.filename.match(/\.(md|mdx)$/)?.[0] || newExt;
-  const filename = `${slug}${ext}`;
-  const path = `src/content/posts/${filename}`;
-  const renamed = current && filename !== current.filename;
-
-  let body = bodyEl.value;
-  // MDX rejects inline JSX that isn't closed on the same line — catch the
-  // two mistakes we've seen break the build, before committing.
-  if (body.split('\n').some((l) => l.includes('<Sidenote') && !l.includes('</Sidenote>'))) {
-    return setStatus('A <Sidenote> is not closed on the same line — MDX needs each sidenote on one line.', true);
-  }
-  if (body.split('\n').some((l) => l.includes('<img') && !l.includes('/>'))) {
-    return setStatus('An <img> tag is missing its self-closing "/>" — MDX requires it.', true);
-  }
+function currentFile() {
+  const title = elements.title.value.trim();
+  const date = elements.date.value;
+  const slug = slugify(elements.slug.value || title);
+  const tags = elements.tags.value
+    .split(',')
+    .map((tag) => tag.trim().replace(/^#/, ''))
+    .filter(Boolean);
+  let body = markdownEditor.getValue();
+  let extension = current?.filename.match(/\.(md|mdx)$/)?.[0] || newExtension;
+  if (body.includes('<Sidenote')) extension = '.mdx';
   if (body.includes('<Sidenote') && !body.includes('import Sidenote')) {
-    body = `import Sidenote from '../../components/Sidenote.astro';\n\n` + body;
+    body = `import Sidenote from '../../components/Sidenote.astro';\n\n${body}`;
   }
-  const tags = tagsEl.value.split(',').map((t) => t.trim()).filter(Boolean);
-  const content = buildFile({
+  return {
     title,
-    description: descEl.value.trim(),
     date,
+    slug,
     tags,
-    draft: draftEl.checked,
-    extra: current?.extra || '',
     body,
-  });
+    extension,
+    filename: `${slug}${extension}`,
+    path: `src/content/posts/${slug}${extension}`,
+    content: buildFile({
+      title,
+      description: elements.description.value.trim(),
+      date,
+      tags,
+      draft: elements.draft.checked,
+      extra: elements.extra.value.trim(),
+      body,
+    }),
+  };
+}
 
-  saveBtn.disabled = true;
-  setStatus('Saving…');
+async function savePost() {
+  if (!client || elements.save.disabled) return;
+  const file = currentFile();
+  if (!file.title) return flashStatus('Add a title before publishing.', 'error', 0);
+  if (!file.date) return flashStatus('Choose a publish date.', 'error', 0);
+  if (!file.slug) return flashStatus('Add a valid slug.', 'error', 0);
+  const mdxError = validateMdxBody(file.body);
+  if (mdxError) return flashStatus(mdxError, 'error', 0);
+
+  const renamed = current && file.filename !== current.filename;
+  const oldRecoveryKey = recoveryKey();
+  elements.save.disabled = true;
+  setSyncState('saving', 'Publishing to GitHub…');
+  flashStatus('Publishing changes…', '', 0);
+
   try {
     if (pendingAssets.size) {
-      // Imported images: upload each before the post that references them.
-      setStatus(`Uploading ${pendingAssets.size} image(s)…`);
-      for (const [assetPath, file] of pendingAssets) {
-        const b64 = await fileToBase64(file);
-        let assetSha;
+      let uploaded = 0;
+      for (const [assetPath, asset] of [...pendingAssets]) {
+        flashStatus(`Uploading image ${uploaded + 1} of ${pendingAssets.size}…`, '', 0);
+        let sha;
         try {
-          assetSha = (await client.getFile(assetPath)).sha; // overwrite if it exists
-        } catch {}
-        await client.putFile(assetPath, b64, `Add image: ${assetPath.split('/').pop()}`, assetSha);
+          sha = (await client.getFile(assetPath)).sha;
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
+        await client.putFile(
+          assetPath,
+          await fileToBase64(asset),
+          `Add image: ${assetPath.split('/').pop()}`,
+          sha,
+        );
         pendingAssets.delete(assetPath);
+        uploaded += 1;
       }
-      setStatus('Saving…');
     }
+
     if (renamed) {
-      // Don't clobber a different post that already has the target slug.
       try {
-        await client.getFile(path);
-        return setStatus(`A post named ${filename} already exists.`, true);
-      } catch {
-        /* 404 — name is free */
+        await client.getFile(file.path);
+        throw new Error(`A post named ${file.filename} already exists.`);
+      } catch (error) {
+        if (error.status !== 404) throw error;
       }
     }
+
     const message = renamed
-      ? `Rename post: ${current.filename} → ${filename}`
+      ? `Rename post: ${current.filename} → ${file.filename}`
       : current
-        ? `Edit post: ${title}`
-        : `New post: ${title}`;
-    let res;
+        ? `Edit post: ${file.title}`
+        : `New post: ${file.title}`;
+    let response;
     try {
-      // A rename creates a new file — the old sha must not be sent.
-      res = await client.putFile(path, textToBase64(content), message, renamed ? undefined : current?.sha);
-    } catch (e) {
-      if (e.status !== 409) throw e;
-      const fresh = await client.getFile(path); // sha went stale — retry once
-      res = await client.putFile(path, textToBase64(content), message, fresh.sha);
+      response = await client.putFile(
+        file.path,
+        textToBase64(file.content),
+        message,
+        renamed ? undefined : current?.sha,
+      );
+    } catch (error) {
+      if (error.status === 409) {
+        throw new Error('This post changed on GitHub. Refresh it before publishing to avoid overwriting work.');
+      }
+      throw error;
     }
+
     if (renamed) {
       await client.deleteFile(current.path, `Remove old name: ${current.filename}`, current.sha);
     }
-    current = { path, sha: res.content.sha, filename, extra: current?.extra || '' };
-    slugEl.value = filename.replace(/\.(md|mdx)$/, '');
-    deleteBtn.hidden = false;
+
+    current = {
+      path: file.path,
+      sha: response.content.sha,
+      filename: file.filename,
+    };
+    newExtension = file.extension;
+    elements.slug.value = file.slug;
+    elements.slug.dataset.touched = '1';
+    elements.delete.hidden = false;
+    elements.currentLabel.textContent = file.title;
+    clearRecovery(connectedRepo, oldRecoveryKey);
+    clearRecovery(connectedRepo, file.path);
     dirty = false;
-    setStatus(renamed ? `Renamed to ${filename} ✓` : 'Saved — committed to the repo ✓');
-    refreshList();
-    schedulePreview(); // newly uploaded images can now hydrate
-  } catch (e) {
-    setStatus(e.message, true);
+    elements.localState.textContent = '';
+    setSyncState('saved', 'Synced with GitHub');
+    flashStatus(elements.draft.checked ? 'Draft saved to GitHub.' : 'Published to GitHub.', 'success');
+    await refreshPosts();
+    renderPostList();
+  } catch (error) {
+    setSyncState('error', 'Publish failed');
+    flashStatus(error.message, 'error', 0);
   } finally {
-    saveBtn.disabled = false;
+    elements.save.disabled = false;
   }
 }
 
 async function deletePost() {
   if (!current) return;
-  if (!confirm(`Delete ${current.filename}? This commits a deletion to the repo.`)) return;
+  if (!window.confirm(`Delete ${current.filename}? This creates a deletion commit on GitHub.`)) return;
   try {
-    await client.deleteFile(current.path, `Delete post: ${titleEl.value.trim() || current.filename}`, current.sha);
-    setStatus('Deleted ✓');
-    newPost();
+    elements.delete.disabled = true;
+    await client.deleteFile(
+      current.path,
+      `Delete post: ${elements.title.value.trim() || current.filename}`,
+      current.sha,
+    );
+    clearRecovery(connectedRepo, current.path);
     dirty = false;
-    refreshList();
-  } catch (e) {
-    setStatus(e.message, true);
+    flashStatus('Post deleted.', 'success');
+    await refreshPosts({ selectInitial: true });
+  } catch (error) {
+    flashStatus(error.message, 'error', 0);
+  } finally {
+    elements.delete.disabled = false;
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Upload modal (images + diagrams, with optional width)
- * ------------------------------------------------------------------ */
-const modalEl = $('modal');
-const mFile = $('m-file');
-const mName = $('m-name');
-const mAlt = $('m-alt');
-const mCaption = $('m-caption');
-const mWidth = $('m-width');
-const mInsert = $('m-insert');
-const mError = $('m-error');
-const mPreview = $('m-preview');
+function setView(mode) {
+  const allowed = ['write', 'split', 'preview'];
+  const value = allowed.includes(mode) ? mode : 'split';
+  elements.panes.dataset.mode = value;
+  document.querySelectorAll('[data-view]').forEach((button) => {
+    const active = button.dataset.view === value;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  });
+  setPreference('view', value);
+  renderPreview();
+  if (value !== 'preview') requestAnimationFrame(() => markdownEditor.focus());
+}
 
-function openModal(kind, file = null) {
-  modal = { kind, file: null };
-  $('modal-title').textContent = kind === 'diagrams' ? 'Insert diagram' : 'Insert image';
-  $('modal-hint').textContent =
+function closeMenus() {
+  document.querySelectorAll('#toolbar details[open], #properties-menu[open]').forEach((menu) => {
+    menu.open = false;
+  });
+}
+
+function runEditorCommand(command) {
+  closeMenus();
+  if (command === 'undo') markdownEditor.undo();
+  else if (command === 'redo') markdownEditor.redo();
+  else if (command === 'image') openAssetDialog('images');
+  else if (command === 'diagram') openAssetDialog('diagrams');
+  else markdownEditor.format(command);
+}
+
+function toggleFocus() {
+  const active = root.classList.toggle('focus-mode');
+  $('btn-focus').classList.toggle('active', active);
+  $('btn-focus').setAttribute('aria-pressed', String(active));
+  requestAnimationFrame(() => markdownEditor.focus());
+}
+
+function toggleTheme() {
+  const dark = document.documentElement.dataset.theme === 'dark';
+  if (dark) delete document.documentElement.dataset.theme;
+  else document.documentElement.dataset.theme = 'dark';
+  localStorage.setItem('theme', dark ? 'light' : 'dark');
+}
+
+function openSidebar() {
+  root.classList.add('sidebar-open');
+}
+
+function closeSidebar() {
+  root.classList.remove('sidebar-open');
+}
+
+/* Asset uploads */
+const assetDialog = $('asset-dialog');
+const assetFile = $('asset-file');
+const assetName = $('asset-name');
+const assetAlt = $('asset-alt');
+const assetWidth = $('asset-width');
+const assetCaption = $('asset-caption');
+const assetPreview = $('asset-preview');
+const assetInsert = $('asset-insert');
+const assetError = $('asset-error');
+
+function openAssetDialog(kind, file = null) {
+  assetState = { kind, file: null };
+  $('asset-title').textContent = kind === 'diagrams' ? 'Insert an Excalidraw diagram' : 'Insert an image';
+  $('asset-hint').textContent =
     kind === 'diagrams'
-      ? 'Draw at excalidraw.com, export as SVG (tick “Embed scene”), then drop the file below.'
-      : 'PNG, JPG, GIF, WebP or SVG.';
-  $('modal-excalidraw').hidden = kind !== 'diagrams';
-  mFile.value = '';
-  mName.value = '';
-  mAlt.value = '';
-  mCaption.value = '';
-  mWidth.value = '';
-  mError.textContent = '';
-  mPreview.innerHTML = '';
-  mInsert.disabled = true;
-  modalEl.hidden = false;
-  if (file) setModalFile(file);
+      ? 'Export the drawing as SVG with “Embed scene” enabled so you can edit it again later.'
+      : 'PNG, JPG, GIF, WebP, AVIF, and SVG are supported.';
+  $('asset-excalidraw').hidden = kind !== 'diagrams';
+  assetFile.value = '';
+  assetName.value = '';
+  assetAlt.value = '';
+  assetWidth.value = '';
+  assetCaption.value = '';
+  assetPreview.replaceChildren();
+  assetPreview.hidden = true;
+  assetInsert.disabled = true;
+  assetError.textContent = '';
+  assetDialog.showModal();
+  if (file) setAssetFile(file);
 }
 
-function closeModal() {
-  modalEl.hidden = true;
-  modal.file = null;
-}
-
-function setModalFile(file) {
-  const isImage = file.type.startsWith('image/');
-  const isSvg = /\.svg$/i.test(file.name) || file.type === 'image/svg+xml';
-  if (!isImage && !isSvg) {
-    mError.textContent = 'Only image or SVG files.';
+function setAssetFile(file) {
+  if (!file.type.startsWith('image/') && !/\.svg$/i.test(file.name)) {
+    assetError.textContent = 'Choose an image or SVG file.';
     return;
   }
-  modal.file = file;
-  mInsert.disabled = false;
-  mError.textContent = '';
-  mName.value = sanitizeFilename(file.name);
-  if (!mAlt.value) mAlt.value = file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
-  mPreview.innerHTML = '';
-  const img = document.createElement('img');
-  img.src = URL.createObjectURL(file);
-  mPreview.appendChild(img);
+  assetState.file = file;
+  assetName.value = sanitizeFilename(file.name);
+  assetAlt.value ||= file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
+  assetPreview.replaceChildren();
+  const image = document.createElement('img');
+  image.src = URL.createObjectURL(file);
+  image.alt = '';
+  assetPreview.append(image);
+  assetPreview.hidden = false;
+  assetInsert.disabled = false;
+  assetError.textContent = '';
 }
 
-async function doInsert() {
-  if (!modal.file) return;
-  mInsert.disabled = true;
-  mError.textContent = 'Uploading…';
+async function insertAsset(event) {
+  event.preventDefault();
+  if (!assetState.file) return;
+  assetInsert.disabled = true;
+  assetError.textContent = 'Uploading to GitHub…';
   try {
-    let name = sanitizeFilename(mName.value.trim() || modal.file.name);
+    let name = sanitizeFilename(assetName.value.trim() || assetState.file.name);
     if (!/\.[a-z0-9]+$/i.test(name)) {
-      const ext =
-        modal.file.name.match(/\.[a-z0-9]+$/i)?.[0] ||
-        (modal.file.type === 'image/svg+xml' ? '.svg' : '.png');
-      name += ext;
+      name += assetState.file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.png';
     }
-    const path = `public/assets/${modal.kind}/${name}`;
-    const b64 = await fileToBase64(modal.file);
+    const path = `public/assets/${assetState.kind}/${name}`;
     let sha;
     try {
-      sha = (await client.getFile(path)).sha; // overwrite if it already exists
-    } catch {}
-    await client.putFile(path, b64, `Add ${modal.kind.slice(0, -1)}: ${name}`, sha);
-    const width = mWidth.value ? ` width="${Number(mWidth.value)}"` : '';
-    const alt = mAlt.value.trim().replace(/"/g, '&quot;');
-    const caption = mCaption.value
-      .trim()
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    const imgTag = `<img src="${BASE}assets/${modal.kind}/${name}" alt="${alt}"${width} />`;
-    insertBlock(caption ? `<figure>\n${imgTag}\n<figcaption>${caption}</figcaption>\n</figure>` : imgTag);
-    setStatus('Uploaded ✓');
-    closeModal();
-  } catch (e) {
-    mError.textContent = e.message;
-    mInsert.disabled = false;
+      sha = (await client.getFile(path)).sha;
+    } catch (error) {
+      if (error.status !== 404) throw error;
+    }
+    await client.putFile(
+      path,
+      await fileToBase64(assetState.file),
+      `Add ${assetState.kind.slice(0, -1)}: ${name}`,
+      sha,
+    );
+    const width = assetWidth.value ? ` width="${Number(assetWidth.value)}"` : '';
+    const alt = escapeAttribute(assetAlt.value.trim());
+    const caption = escapeAttribute(assetCaption.value.trim());
+    const image = `<img src="${BASE}assets/${assetState.kind}/${name}" alt="${alt}"${width} />`;
+    markdownEditor.insertBlock(
+      caption ? `<figure>\n${image}\n<figcaption>${caption}</figcaption>\n</figure>` : image,
+    );
+    assetDialog.close();
+    flashStatus('Image uploaded and inserted.', 'success');
+  } catch (error) {
+    assetError.textContent = error.message;
+  } finally {
+    assetInsert.disabled = false;
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Obsidian import: drop a .md file (+ its images) and get a ready post.
- * Image references are autodetected from the markdown; dropped image
- * files are matched by file name. Unmatched references still convert to
- * their final <img> paths and are listed as missing.
- * ------------------------------------------------------------------ */
-const importModalEl = $('import-modal');
-const importFilesEl = $('import-files');
-const importStatusEl = $('import-status');
-const importMissingEl = $('import-missing');
-const importGoBtn = $('import-go');
-const importErrorEl = $('import-error');
+/* Markdown and Obsidian import */
+const importDialog = $('import-dialog');
+const importFilesInput = $('import-files');
+const importStatus = $('import-status');
+const importMissing = $('import-missing');
+const importGo = $('import-go');
+const importError = $('import-error');
 
-let importData = null; // { title, slug, date, tags, body, assets: Map }
-let importFiles = new Map(); // name -> File, accumulates across drops
-
-function openImport() {
+function openImportDialog() {
+  closeMenus();
   importData = null;
   importFiles = new Map();
-  importFilesEl.value = '';
-  importStatusEl.textContent = '';
-  importMissingEl.innerHTML = '';
-  importErrorEl.textContent = '';
-  importGoBtn.textContent = 'Import';
-  importGoBtn.disabled = true;
-  importModalEl.hidden = false;
-}
-
-function closeImport() {
-  importModalEl.hidden = true;
-}
-
-function safeDecode(s) {
-  try {
-    return decodeURIComponent(s);
-  } catch {
-    return s;
-  }
-}
-
-// Match a referenced image to a dropped file by file name
-// (exact, %20-decoded, then case-insensitive).
-function findImageFile(ref, files) {
-  const base = ref.split('/').pop();
-  const decoded = safeDecode(base);
-  return (
-    files.find((f) => f.name === base) ||
-    files.find((f) => f.name === decoded) ||
-    files.find((f) => f.name.toLowerCase() === decoded.toLowerCase())
-  );
-}
-
-function escapeAttr(s) {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/"/g, '&quot;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;');
+  importFilesInput.value = '';
+  importStatus.textContent = '';
+  importMissing.replaceChildren();
+  importError.textContent = '';
+  importGo.disabled = true;
+  importGo.textContent = 'Import post';
+  importDialog.showModal();
 }
 
 async function analyzeImport(fileList) {
-  // Files accumulate: drop the .md first, then the images — the dialog
-  // stays open and the analysis updates with every drop.
-  for (const f of fileList) importFiles.set(f.name, f);
-  importErrorEl.textContent = '';
-  importMissingEl.innerHTML = '';
-  importGoBtn.disabled = true;
+  [...fileList].forEach((file) => importFiles.set(file.name, file));
+  importError.textContent = '';
+  importMissing.replaceChildren();
+  importGo.disabled = true;
   importData = null;
 
-  const files = [...importFiles.values()];
-  const mds = files.filter((f) => /\.(md|markdown)$/i.test(f.name));
-  if (mds.length === 0) {
-    importStatusEl.textContent = `${files.length} file(s) loaded — now drop the .md file.`;
-    return;
+  try {
+    const result = await prepareObsidianImport([...importFiles.values()], BASE);
+    if (result.waiting) {
+      importStatus.textContent = `${result.fileCount} file(s) ready. Add the Markdown note next.`;
+      return;
+    }
+    importData = result;
+    importStatus.textContent = `${result.filename} · ${
+      result.total ? `${result.matched} of ${result.total} referenced images matched` : 'no image references found'
+    }`;
+    result.missing.forEach((reference) => {
+      const item = document.createElement('li');
+      item.textContent = reference;
+      importMissing.append(item);
+    });
+    importGo.disabled = false;
+    importGo.textContent = result.missing.length ? 'Import with missing images' : 'Import post';
+  } catch (error) {
+    importStatus.textContent = '';
+    importError.textContent = error.message;
   }
-  if (mds.length > 1) {
-    importStatusEl.textContent = '';
-    importErrorEl.textContent = `You dropped ${mds.length} .md files — import one at a time (Cancel to start over).`;
-    return;
-  }
-  importStatusEl.textContent = '';
-  const md = mds[0];
-  const images = files.filter((f) => f !== md);
-  const text = await md.text();
-  const { data, body: rawBody } = splitFrontmatter(text);
-
-  const assets = new Map(); // repo path -> File
-  const missing = [];
-  let body = rawBody;
-
-  // Obsidian embeds: ![[image.png]], ![[image.png|300]], ![[image.png|caption]]
-  body = body.replace(/!\[\[([^\]|]+)(?:\|([^\]]*))?\]\]/g, (match, ref, alias) => {
-    ref = ref.trim();
-    const file = findImageFile(ref, images);
-    const name = sanitizeFilename(safeDecode(ref.split('/').pop()));
-    const a = (alias || '').trim();
-    const width = /^\d+$/.test(a) ? ` width="${a}"` : '';
-    const alt = escapeAttr(a && !/^\d+$/.test(a) ? a : name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' '));
-    if (file) assets.set(`public/assets/images/${name}`, file);
-    else missing.push(ref);
-    return `<img src="${BASE}assets/images/${name}" alt="${alt}"${width} />`;
-  });
-
-  // Standard markdown images with relative paths (external URLs untouched)
-  body = body.replace(/!\[([^\]]*)\]\(\s*([^)\s]+)(?:\s+"[^"]*")?\s*\)/g, (match, alt, url) => {
-    if (/^https?:\/\//i.test(url)) return match;
-    const file = findImageFile(url.trim(), images);
-    const name = sanitizeFilename(safeDecode(url.trim().split('/').pop()));
-    if (file) assets.set(`public/assets/images/${name}`, file);
-    else missing.push(url.trim());
-    return `<img src="${BASE}assets/images/${name}" alt="${escapeAttr(alt)}" />`;
-  });
-
-  // Wikilinks -> plain text (their target notes don't exist on the blog)
-  body = body.replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2');
-  body = body.replace(/\[\[([^\]]+)\]\]/g, '$1');
-
-  const base = md.name.replace(/\.(md|markdown)$/i, '');
-  importData = {
-    title: data.title || base.replace(/[-_]+/g, ' '),
-    description: data.description || '',
-    slug: slugify(base),
-    date: data.date || today(),
-    tags: data.tags || [],
-    body,
-    assets,
-  };
-
-  const total = assets.size + missing.length;
-  importStatusEl.textContent = `${md.name}: ${
-    total === 0 ? 'no image references found' : `${assets.size} of ${total} referenced image(s) matched`
-  }.`;
-  for (const m of missing) {
-    const li = document.createElement('li');
-    li.textContent = m;
-    importMissingEl.appendChild(li);
-  }
-  importGoBtn.textContent = missing.length ? 'Import anyway' : 'Import';
-  importGoBtn.disabled = false;
 }
 
-function doImport() {
-  if (!importData) return;
-  newPost(); // resets pendingAssets + newExt; also guards unsaved changes
-  titleEl.value = importData.title;
-  descEl.value = importData.description;
-  slugEl.value = importData.slug;
-  slugEl.dataset.touched = '1';
-  dateEl.value = importData.date;
-  tagsEl.value = importData.tags.join(', ');
-  draftEl.checked = true;
-  bodyEl.value = importData.body.replace(/^\n+/, '');
+function importPost(event) {
+  event.preventDefault();
+  if (!importData || !canLeaveDocument()) return;
+  newPost({ force: true });
+  current = null;
+  newExtension = '.md';
   pendingAssets = importData.assets;
-  newExt = '.md'; // plain Markdown — arbitrary Obsidian content can't hit MDX parse errors
-  dirty = true;
-  schedulePreview();
-  setStatus(
-    importData.assets.size
-      ? `Imported — review, then Save. ${importData.assets.size} image(s) upload on save.`
-      : 'Imported — review, then Save.',
+  setDocument(importData, importData.body, { dirty: true });
+  markDirty();
+  importDialog.close();
+  flashStatus(
+    pendingAssets.size
+      ? `Imported. ${pendingAssets.size} image(s) will upload when you publish.`
+      : 'Imported. Review the post, then publish.',
+    'success',
   );
-  closeImport();
-  bodyEl.focus();
+  markdownEditor.focus();
 }
 
-$('btn-import').onclick = openImport;
-$('import-cancel').onclick = closeImport;
-importGoBtn.onclick = doImport;
-importFilesEl.onchange = () => importFilesEl.files.length && analyzeImport(importFilesEl.files);
-importModalEl.addEventListener('click', (e) => e.target === importModalEl && closeImport());
-const importDrop = $('import-drop');
-importDrop.addEventListener('dragover', (e) => e.preventDefault());
-importDrop.addEventListener('drop', (e) => {
-  e.preventDefault();
-  if (e.dataTransfer.files.length) analyzeImport(e.dataTransfer.files);
+/* Export */
+function exportMarkdown() {
+  closeMenus();
+  const file = currentFile();
+  if (!file.slug) return flashStatus('Add a title or slug before exporting.', 'error');
+  const url = URL.createObjectURL(new Blob([file.content], { type: 'text/markdown;charset=utf-8' }));
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = file.filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  flashStatus(`Exported ${file.filename}.`, 'success');
+}
+
+/* Version history */
+const historyDialog = $('history-dialog');
+const historyList = $('history-list');
+
+async function openHistory() {
+  closeMenus();
+  if (!current) return flashStatus('Publish this post once to start its version history.', 'error');
+  historyList.innerHTML = '<p class="history-empty">Loading versions…</p>';
+  historyDialog.showModal();
+  try {
+    const commits = await client.listCommits(current.path);
+    historyList.replaceChildren();
+    if (!commits.length) {
+      historyList.innerHTML = '<p class="history-empty">No earlier versions found.</p>';
+      return;
+    }
+    commits.forEach((commit, index) => {
+      const item = document.createElement('div');
+      item.className = 'history-item';
+      const node = document.createElement('span');
+      node.className = 'history-node';
+      const copy = document.createElement('span');
+      copy.className = 'history-copy';
+      const title = document.createElement('strong');
+      title.textContent = commit.commit.message.split('\n')[0];
+      const meta = document.createElement('span');
+      meta.textContent = `${new Date(commit.commit.author.date).toLocaleString()} · ${
+        commit.author?.login || commit.commit.author.name
+      }`;
+      copy.append(title, meta);
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.textContent = index === 0 ? 'Current' : 'Restore';
+      restore.disabled = index === 0;
+      restore.addEventListener('click', async () => {
+        if (dirty && !window.confirm('Replace the current editor contents with this version?')) return;
+        restore.disabled = true;
+        restore.textContent = 'Loading…';
+        try {
+          const version = await client.getFile(current.path, commit.sha);
+          const { data, extra, body } = splitFrontmatter(base64ToText(version.content));
+          setDocument(
+            {
+              title: data.title,
+              description: data.description,
+              slug: current.filename.replace(/\.(md|mdx)$/, ''),
+              date: data.date,
+              tags: data.tags || [],
+              draft: !!data.draft,
+              extra,
+            },
+            body,
+            { dirty: true },
+          );
+          markDirty();
+          historyDialog.close();
+          flashStatus('Earlier version restored locally. Publish to make it current.', 'success');
+        } catch (error) {
+          flashStatus(error.message, 'error', 0);
+          restore.disabled = false;
+          restore.textContent = 'Restore';
+        }
+      });
+      item.append(node, copy, restore);
+      historyList.append(item);
+    });
+  } catch (error) {
+    historyList.innerHTML = `<p class="history-empty">${escapeAttribute(error.message)}</p>`;
+  }
+}
+
+/* Command menu */
+const commandDialog = $('command-dialog');
+const commandSearch = $('command-search');
+const commandList = $('command-list');
+
+const commands = [
+  { section: 'Post', name: 'New post', icon: '+', keys: '⌘ N', run: () => newPost() },
+  { section: 'Post', name: 'Publish changes', icon: '↑', keys: '⌘ S', run: savePost },
+  { section: 'Post', name: 'Import Markdown', icon: 'I', run: openImportDialog },
+  { section: 'Post', name: 'Export Markdown', icon: 'E', run: exportMarkdown },
+  { section: 'Post', name: 'Version history', icon: '↶', run: openHistory },
+  { section: 'View', name: 'Write view', icon: 'W', run: () => setView('write') },
+  { section: 'View', name: 'Split view', icon: 'S', run: () => setView('split') },
+  { section: 'View', name: 'Preview view', icon: 'P', run: () => setView('preview') },
+  { section: 'View', name: 'Toggle focus mode', icon: '↗', run: toggleFocus },
+  { section: 'Formatting', name: 'Heading 2', icon: 'H', run: () => runEditorCommand('h2') },
+  { section: 'Formatting', name: 'Bold', icon: 'B', keys: '⌘ B', run: () => runEditorCommand('bold') },
+  { section: 'Formatting', name: 'Link', icon: '↗', run: () => runEditorCommand('link') },
+  { section: 'Formatting', name: 'Code block', icon: '<>', run: () => runEditorCommand('codeblock') },
+  { section: 'Insert', name: 'Image', icon: '▧', run: () => openAssetDialog('images') },
+  { section: 'Insert', name: 'Excalidraw diagram', icon: '◇', run: () => openAssetDialog('diagrams') },
+  { section: 'Insert', name: 'Table', icon: '#', run: () => runEditorCommand('table') },
+  { section: 'Insert', name: 'Equation', icon: '∑', run: () => runEditorCommand('math') },
+  { section: 'Insert', name: 'Sidenote', icon: 'N', run: () => runEditorCommand('sidenote') },
+  { section: 'Insert', name: 'Footnote', icon: '¹', run: () => runEditorCommand('footnote') },
+];
+
+const commandPalette = createCommandPalette({
+  dialog: commandDialog,
+  input: commandSearch,
+  list: commandList,
+  commands,
 });
 
-/* ------------------------------------------------------------------ *
- * Auth gate
- * ------------------------------------------------------------------ */
-function enter() {
-  gate.hidden = true;
-  app.hidden = false;
-  newPost();
-  refreshList();
+function openCommandDialog() {
+  commandPalette.open();
 }
 
-async function connect() {
-  const owner = $('gate-owner').value.trim();
-  const repo = $('gate-repo').value.trim();
-  const token = $('gate-token').value.trim();
+/* Authentication */
+async function connect(event) {
+  event?.preventDefault();
+  const owner = elements.gateOwner.value.trim();
+  const repo = elements.gateRepo.value.trim();
+  const token = elements.gateToken.value.trim();
   if (!owner || !repo || !token) {
-    $('gate-error').textContent = 'All three fields are required.';
+    elements.gateError.textContent = 'Complete all three fields.';
     return;
   }
   client = createClient({ token, owner, repo, branch: cfg.branch });
-  $('gate-error').textContent = 'Connecting…';
+  elements.gateError.textContent = 'Connecting securely to GitHub…';
   try {
     await client.test();
     localStorage.setItem(LS_TOKEN, token);
     localStorage.setItem(LS_REPO, JSON.stringify({ owner, repo }));
-    enter();
-  } catch (e) {
-    $('gate-error').textContent = `${e.message} — check the token and repo names.`;
+    connectedRepo = `${owner}/${repo}`;
+    elements.repoLabel.textContent = connectedRepo;
+    await enter();
+  } catch (error) {
+    elements.gateError.textContent = `${error.message}. Check the token and repository.`;
   }
 }
 
-/* ------------------------------------------------------------------ *
- * Wiring
- * ------------------------------------------------------------------ */
-$('gate-save').onclick = connect;
-$('btn-new').onclick = newPost;
-$('btn-refresh').onclick = refreshList;
-saveBtn.onclick = save;
-deleteBtn.onclick = deletePost;
-$('btn-forget').onclick = () => {
+async function enter() {
+  elements.gate.hidden = true;
+  elements.app.hidden = false;
+  await loadEditorModules();
+  initMarkdownEditor();
+  setView(getPreference('view', 'split'));
+  await refreshPosts({ selectInitial: true });
+}
+
+/* Event wiring */
+elements.gateForm.addEventListener('submit', connect);
+elements.save.addEventListener('click', savePost);
+$('btn-new').addEventListener('click', () => newPost());
+$('btn-refresh').addEventListener('click', () => refreshPosts());
+elements.delete.addEventListener('click', deletePost);
+$('btn-import').addEventListener('click', openImportDialog);
+$('btn-export').addEventListener('click', exportMarkdown);
+$('btn-history').addEventListener('click', openHistory);
+$('btn-shortcuts').addEventListener('click', () => {
+  closeMenus();
+  $('shortcuts-dialog').showModal();
+});
+$('btn-command').addEventListener('click', openCommandDialog);
+$('btn-theme').addEventListener('click', toggleTheme);
+$('btn-focus').addEventListener('click', toggleFocus);
+$('btn-sidebar').addEventListener('click', () =>
+  root.classList.contains('sidebar-open') ? closeSidebar() : openSidebar(),
+);
+$('sidebar-scrim').addEventListener('click', closeSidebar);
+$('btn-forget').addEventListener('click', () => {
   localStorage.removeItem(LS_TOKEN);
   location.reload();
-};
-$('btn-preview').onclick = () => {
-  previewEl.hidden = !previewEl.hidden;
-  panesEl.classList.toggle('split', !previewEl.hidden);
-  $('btn-preview').classList.toggle('primary', !previewEl.hidden);
-  if (!previewEl.hidden) renderPreview();
-};
-
-document.querySelectorAll('[data-tb]').forEach((btn) => {
-  btn.onclick = () => toolbarActions[btn.dataset.tb]?.();
 });
 
-[titleEl, descEl, slugEl, dateEl, tagsEl, draftEl].forEach((el) => el.addEventListener('input', markDirty));
-titleEl.addEventListener('input', () => {
-  if (!current && !slugEl.dataset.touched) slugEl.value = slugify(titleEl.value);
-});
-slugEl.addEventListener('input', () => (slugEl.dataset.touched = '1'));
-bodyEl.addEventListener('input', () => {
-  markDirty();
-  schedulePreview();
-});
-
-// Modal events
-$('m-cancel').onclick = closeModal;
-mInsert.onclick = doInsert;
-mFile.onchange = () => mFile.files[0] && setModalFile(mFile.files[0]);
-modalEl.addEventListener('click', (e) => e.target === modalEl && closeModal());
-
-const drop = $('drop');
-drop.addEventListener('dragover', (e) => e.preventDefault());
-drop.addEventListener('drop', (e) => {
-  e.preventDefault();
-  const f = e.dataTransfer.files[0];
-  if (f) setModalFile(f);
+elements.search.addEventListener('input', renderPostList);
+$('post-filters').addEventListener('click', (event) => {
+  const button = event.target.closest('[data-filter]');
+  if (!button) return;
+  listFilter = button.dataset.filter;
+  document.querySelectorAll('[data-filter]').forEach((filter) => {
+    const active = filter === button;
+    filter.classList.toggle('active', active);
+    filter.setAttribute('aria-selected', String(active));
+  });
+  renderPostList();
 });
 
-// Paste / drop files straight into the textarea.
-bodyEl.addEventListener('paste', (e) => {
-  const f = [...(e.clipboardData?.files || [])].find(
-    (f) => f.type.startsWith('image/') || /\.svg$/i.test(f.name),
-  );
-  if (f) {
-    e.preventDefault();
-    openModal(/\.svg$/i.test(f.name) ? 'diagrams' : 'images', f);
-    return;
-  }
-  // Excalidraw's "copy SVG to clipboard" puts SVG markup on the clipboard as text.
-  const text = e.clipboardData?.getData('text/plain') || '';
-  if (/^\s*<svg[\s>]/i.test(text) && text.includes('</svg>')) {
-    e.preventDefault();
-    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-');
-    const file = new File([text], `diagram-${stamp}.svg`, { type: 'image/svg+xml' });
-    openModal('diagrams', file);
-  }
+[elements.title, elements.description, elements.slug, elements.date, elements.tags, elements.draft, elements.extra]
+  .forEach((field) => {
+    field.addEventListener('input', () => {
+      markDirty();
+      if (field === elements.title) {
+        elements.currentLabel.textContent = elements.title.value || 'Untitled';
+        if (!current && !elements.slug.dataset.touched) elements.slug.value = slugify(elements.title.value);
+      }
+    });
+  });
+elements.slug.addEventListener('input', () => (elements.slug.dataset.touched = '1'));
+
+document.querySelectorAll('[data-command]').forEach((button) => {
+  button.addEventListener('click', () => runEditorCommand(button.dataset.command));
 });
-bodyEl.addEventListener('dragover', (e) => e.preventDefault());
-bodyEl.addEventListener('drop', (e) => {
-  const f = e.dataTransfer.files[0];
-  if (f && (f.type.startsWith('image/') || /\.svg$/i.test(f.name))) {
-    e.preventDefault();
-    openModal(/\.svg$/i.test(f.name) ? 'diagrams' : 'images', f);
-  }
+$('heading-select').addEventListener('change', (event) => {
+  runEditorCommand(event.target.value);
+  event.target.value = 'paragraph';
+});
+document.querySelectorAll('[data-view]').forEach((button) => {
+  button.addEventListener('click', () => setView(button.dataset.view));
 });
 
-// Tab / Shift+Tab: indent or unindent. With a selection, every line it
-// touches is shifted; with just a cursor, Tab inserts two spaces and
-// Shift+Tab removes up to two from the start of the current line.
-const INDENT = '  ';
-
-bodyEl.addEventListener('keydown', (e) => {
-  if (e.key !== 'Tab') return;
-  e.preventDefault();
-  const { selectionStart: s, selectionEnd: end, value } = bodyEl;
-  const lineStart = value.lastIndexOf('\n', s - 1) + 1;
-  const block = value.slice(lineStart, end);
-
-  if (e.shiftKey) {
-    const unindented = block.replace(/^ {1,2}/gm, '');
-    bodyEl.value = value.slice(0, lineStart) + unindented + value.slice(end);
-    if (s === end) {
-      const removed = block.length - unindented.length;
-      const pos = Math.max(lineStart, s - removed);
-      bodyEl.setSelectionRange(pos, pos);
-    } else {
-      bodyEl.setSelectionRange(lineStart, lineStart + unindented.length);
-    }
-  } else if (s === end) {
-    bodyEl.value = value.slice(0, s) + INDENT + value.slice(end);
-    bodyEl.setSelectionRange(s + INDENT.length, s + INDENT.length);
-  } else {
-    const indented = block.replace(/^/gm, INDENT);
-    bodyEl.value = value.slice(0, lineStart) + indented + value.slice(end);
-    bodyEl.setSelectionRange(lineStart, lineStart + indented.length);
-  }
-  markDirty();
-  schedulePreview();
+$('asset-form').addEventListener('submit', insertAsset);
+assetFile.addEventListener('change', () => assetFile.files[0] && setAssetFile(assetFile.files[0]));
+const assetDrop = $('asset-drop');
+assetDrop.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  assetDrop.classList.add('dragging');
+});
+assetDrop.addEventListener('dragleave', () => assetDrop.classList.remove('dragging'));
+assetDrop.addEventListener('drop', (event) => {
+  event.preventDefault();
+  assetDrop.classList.remove('dragging');
+  if (event.dataTransfer.files[0]) setAssetFile(event.dataTransfer.files[0]);
 });
 
-// Keyboard: Cmd/Ctrl+S saves; Cmd/Ctrl+B / Cmd/Ctrl+I format in the textarea.
-document.addEventListener('keydown', (e) => {
-  if (!(e.metaKey || e.ctrlKey) || app.hidden) return;
-  if (e.key === 's') {
-    e.preventDefault();
-    save();
-  } else if (e.target === bodyEl && e.key === 'b') {
-    e.preventDefault();
-    toolbarActions.bold();
-  } else if (e.target === bodyEl && e.key === 'i') {
-    e.preventDefault();
-    toolbarActions.italic();
+$('import-form').addEventListener('submit', importPost);
+importFilesInput.addEventListener('change', () => {
+  if (importFilesInput.files.length) analyzeImport(importFilesInput.files);
+});
+const importDrop = $('import-drop');
+importDrop.addEventListener('dragover', (event) => {
+  event.preventDefault();
+  importDrop.classList.add('dragging');
+});
+importDrop.addEventListener('dragleave', () => importDrop.classList.remove('dragging'));
+importDrop.addEventListener('drop', (event) => {
+  event.preventDefault();
+  importDrop.classList.remove('dragging');
+  if (event.dataTransfer.files.length) analyzeImport(event.dataTransfer.files);
+});
+
+elements.sourcePane.addEventListener('dragenter', (event) => {
+  if ([...(event.dataTransfer?.items || [])].some((item) => item.kind === 'file')) {
+    elements.sourcePane.classList.add('dragging');
   }
 });
+elements.sourcePane.addEventListener('dragleave', (event) => {
+  if (!elements.sourcePane.contains(event.relatedTarget)) elements.sourcePane.classList.remove('dragging');
+});
+elements.sourcePane.addEventListener('drop', () => elements.sourcePane.classList.remove('dragging'));
 
-window.addEventListener('beforeunload', (e) => {
-  if (dirty) e.preventDefault();
+document.querySelectorAll('[data-close-dialog]').forEach((button) => {
+  button.addEventListener('click', () => $(button.dataset.closeDialog).close());
+});
+document.querySelectorAll('dialog').forEach((dialog) => {
+  dialog.addEventListener('click', (event) => {
+    if (event.target === dialog) dialog.close();
+  });
 });
 
-/* ------------------------------------------------------------------ *
- * Boot
- * ------------------------------------------------------------------ */
-const savedRepo = JSON.parse(localStorage.getItem(LS_REPO) || 'null');
-$('gate-owner').value = savedRepo?.owner || cfg.owner;
-$('gate-repo').value = savedRepo?.repo || cfg.repo;
+document.addEventListener('click', (event) => {
+  document.querySelectorAll('#toolbar details[open], #properties-menu[open]').forEach((menu) => {
+    if (!menu.contains(event.target)) menu.open = false;
+  });
+});
+
+document.addEventListener('keydown', (event) => {
+  if (elements.app.hidden) return;
+  const commandKey = event.metaKey || event.ctrlKey;
+  if (commandKey && event.key.toLowerCase() === 'k') {
+    event.preventDefault();
+    openCommandDialog();
+  } else if (commandKey && event.key.toLowerCase() === 's') {
+    event.preventDefault();
+    savePost();
+  } else if (commandKey && event.key === '/') {
+    event.preventDefault();
+    openSidebar();
+    elements.search.focus();
+  } else if (commandKey && event.key.toLowerCase() === 'n') {
+    event.preventDefault();
+    newPost();
+  } else if (event.key === 'Escape') {
+    if (root.classList.contains('sidebar-open')) closeSidebar();
+    else if (root.classList.contains('focus-mode')) toggleFocus();
+  }
+});
+
+window.addEventListener('beforeunload', (event) => {
+  if (dirty) event.preventDefault();
+});
+
+/* Boot */
+let savedRepo = null;
+try {
+  savedRepo = JSON.parse(localStorage.getItem(LS_REPO) || 'null');
+} catch {
+  savedRepo = null;
+}
+elements.gateOwner.value = savedRepo?.owner || cfg.owner;
+elements.gateRepo.value = savedRepo?.repo || cfg.repo;
+connectedRepo = `${elements.gateOwner.value}/${elements.gateRepo.value}`;
+elements.repoLabel.textContent = connectedRepo;
 
 const savedToken = localStorage.getItem(LS_TOKEN);
 if (savedToken) {
   client = createClient({
     token: savedToken,
-    owner: $('gate-owner').value,
-    repo: $('gate-repo').value,
+    owner: elements.gateOwner.value,
+    repo: elements.gateRepo.value,
     branch: cfg.branch,
   });
   enter();
 } else {
-  gate.hidden = false; // no stored token — show the sign-in gate
+  elements.gate.hidden = false;
 }

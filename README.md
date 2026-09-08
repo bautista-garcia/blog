@@ -6,14 +6,28 @@ A minimalist personal blog built with [Astro](https://astro.build), deployed to 
 
 Open **`/editor/`** on the deployed site or in dev (`npm run dev` → http://localhost:4321/blog/editor/). On first visit, paste a GitHub token (fine-grained, this repo only, **Contents: read and write** — or classic `repo` scope). It's stored only in your browser.
 
-From there everything is a commit to this repo:
+From there the editor works like a small, GitHub-backed writing app:
 
-- **Write/edit posts** — title, date, tags, draft, and Markdown body with a toolbar (code blocks, math, sidenotes, links). `Cmd/Ctrl+S` saves.
-- **Description** — optional field; overrides the home-page excerpt (default: the post's first paragraph, with markup/LaTeX stripped).
-- **Images & Excalidraw diagrams** — click *Image…* / *Diagram…*, or just **paste/drop into the text area**: image files, and even Excalidraw's *"copy SVG to clipboard"* — paste and it uploads as an SVG. The file is committed to `public/assets/` and an `<img>` tag is inserted at the cursor.
-- **Resizing** — set a pixel width in the upload dialog (or edit the `width="..."` attribute afterwards). Empty means full column width.
-- **Preview** — approximate preview (Markdown + KaTeX); check the real rendering in `npm run dev`.
-- **Import from Obsidian** — click *Import…* in the sidebar and drop a `.md` file. The editor autodetects every image the note references; to bring the files along, drop the note **together with the image files** from your vault (e.g. select all in the folder). `![[embeds]]` (with `|width` / `|caption`), `[[wikilinks]]` (→ plain text), and YAML frontmatter (title/date/tags) are converted automatically. Matched images upload when you save; anything unmatched is listed as missing and its `<img>` path is left ready for a later upload. Imported posts are saved as plain `.md` (safer for arbitrary Markdown).
+- **Modern Markdown editing** — CodeMirror provides syntax highlighting, line numbers, folding, bracket matching, multiple cursors, selection matching, undo/redo, search/replace, list continuation, and keyboard-driven indentation.
+- **Write, split, and preview views** — live GFM, table, checklist, math, footnote, image, figure, and sidenote rendering with synchronized scrolling in split view.
+- **Fast authoring** — formatting toolbar, insert menu, document outline, focus mode, command menu (`Cmd/Ctrl+K`), word/character counts, and estimated reading time.
+- **Publishing metadata** — title, description, slug, date, tags, draft status, plus a raw field for additional frontmatter. `Cmd/Ctrl+S` publishes the change as a GitHub commit.
+- **Safe recovery and history** — unpublished work is recovered from browser storage. Published posts expose their Git commit history and any earlier version can be restored into the editor before republishing.
+- **Post management** — search the library, filter published posts and drafts, rename via the slug, create, export, or delete posts.
+- **Images & Excalidraw diagrams** — use the insert menu, or paste/drop directly into the editor. Excalidraw's copied SVG markup is recognized automatically. Files are committed to `public/assets/` and inserted at the cursor with optional alt text, width, and caption.
+- **Import from Obsidian** — import a `.md` file with its images. `![[embeds]]`, `[[wikilinks]]`, frontmatter, widths, and captions are converted; missing files are reported before import.
+
+The editor code is deliberately split by responsibility so changes stay approachable:
+
+- `src/pages/editor/index.astro` — semantic app markup
+- `src/editor/editor.css` — the complete editor theme and responsive layout
+- `src/editor/codemirror.js` — editor engine and Markdown commands
+- `src/editor/command-palette.js` — searchable keyboard command UI
+- `src/editor/markdown.js` — frontmatter, preview rendering, outline, and writing stats
+- `src/editor/obsidian.js` — Markdown/Obsidian import conversion
+- `src/editor/storage.js` — local recovery and preferences
+- `src/editor/github.js` — the small GitHub Contents API client
+- `src/editor/app.js` — product state and interaction wiring
 
 Saving pushes a commit, so the GitHub Action rebuilds and the change is live in ~a minute.
 
