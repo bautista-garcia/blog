@@ -39,7 +39,7 @@ The resulting text is then [tokenized](https://platform.openai.com/tokenizer), p
 <figcaption>request assigned to a SLOT</figcaption>
 </figure>
 
-Each slot (also called Sequence in the code) contains the state the engine needs to process its assigned request. Its **`bindings table`** maps each part of the request’s KV cache to its location in physical memory, which we will explore in more detail later (Appendix A: Sparse Buffers). A **bank bit** tells the linear attention kernels which state buffer to read from and which one to write to, with the buffers alternating roles in a ping-pong pattern between forward passes. The **request** itself is an array of token IDs: it begins with the tokenized prompt and chat template, and each newly sampled token is appended to it. The **`kv_valid`** field records how many of those tokens already have valid KV state. During ordinary decoding, the most recently sampled token, also called the anchor token, has not yet passed through the model, so `kv_valid = len(request) - 1`. During speculative decoding, `kv_valid` also indicates how many proposed tokens were accepted by the target model and therefore have valid computed state. The **`busy`** flag indicates that some of the sequence’s tokens are currently participating in a forward pass, whereas **`active`** indicates that the sequence is live and still has work to perform. Finally, each sequence stores its generation settings, including the drafter width (proposed tokens per draft pass) and its sampling configuration. Together, these fields give the engine everything it needs to schedule the sequence, locate its state, and decode through the request.
+Each slot (also called Sequence in the code) contains the state the engine needs to process its assigned request. Its **`bindings table`** maps each part of the request’s KV cache to its location in physical memory, which we will explore in more detail later (Appendix A: Sparse Buffers). A **bank bit** tells the linear attention kernels which state buffer to read from and which one to write to, with the buffers alternating roles in a ping-pong pattern between forward passes. The **request** itself is an array of token IDs: it begins with the tokenized prompt and chat template, and each newly sampled token is appended to it. The **`kv_valid`** field records how many of those tokens already have valid KV state. During ordinary decoding, the most recently sampled token, also called the anchor token, has not yet passed through the model, so `kv_valid = len(request) - 1`. During speculative decoding, `kv_valid` also indicates how many proposed tokens were accepted by the target model and therefore have valid computed state. The **`busy`** flag indicates that some of the sequence’s tokens are currently participating in a forward pass, whereas **`active`** indicates that the sequence is live and still has work to perform.  
 
 
 
@@ -48,27 +48,43 @@ Each slot (also called Sequence in the code) contains the state the engine needs
 
 Most LLM applications combine the user’s message with a system prompt and tool definitions before sending a request to the model. Because this content forms a shared prefix across requests, the engine can compute its state once and reuse it.
 
+The prefix cache stores checkpoints of this state for progressively longer token prefixes. Each checkpoint is identified by a chained hash, allowing the engine to find previously computed state without comparing entire token sequences.
+
 <figure>
 <img src="/blog/assets/images/pasted-image-20260909011019448.png" alt="image" />
 <figcaption>Prefix cache</figcaption>
 </figure>
 
-The main design choice is the granularity at which prefixes are cached. Saving entries more frequently improves the hit rate but consumes more memory. Although Qwen 3.8’s linear-attention layers reduce the state required by each sequence, every cache entry still needs about 50 MiB to store the GatedDeltaNet state for all 24 layers. I currently use a 512-token interval as a reasonable tradeoff, though this value still needs to be tuned using real workload data.
+The main design choice is the granularity at which prefixes are cached. Saving entries more frequently improves the hit rate but consumes more memory. Although Qwen 3.8’s linear-attention layers reduce the state required by each sequence, every prefix cache entry still needs about 50 MiB to store the GatedDeltaNet state for all 24 layers (see Appendix E). I currently use a 512-token interval as a reasonable tradeoff, though this value still needs to be tuned using real workload data.
 
-When a request enters a slot, the engine hashes its prefixes and performs a cache lookup. On a hit, it copies the cached GDN state into the slot’s buffer selected by `bank`, preventing the shared cache entry from being modified during decoding. The corresponding physical KV-cache bindings are then installed in the slot’s `bindings table`.
+With the prefix cache in place, we can return to what happens when a request enters a slot. The engine hashes the request’s 512 token prefixes and performs a cache lookup. On a hit, it copies the cached GDN state into the slot’s buffer selected by `bank`, preventing that cache entry from being modified by this new sequence. The corresponding physical KV-cache bindings are then installed in the slot’s `bindings table`.
 
-
-
-
-
-
-
-
+<figure>
+<img src="/blog/assets/images/pasted-image-20260909135650302.png" alt="image" />
+<figcaption>Prefix Cache Hit</figcaption>
+</figure>
 
 ### The Scheduler Forms a Batch
 *How the scheduler grabs pending computation from multiple sequences to form a batch. How there is a scheduling policy which favors a metric in this case, but how it could favor others. What are the constraints here?*
+
+If we processed each sequence one at a time, we would not get any benefit from supporting concurrent requests. The aggregate speed, meaning the sum of all sequence speeds, would be at most the speed of a single request running in isolation. That is why we want to apply [Continuous Batching](https://huggingface.co/blog/continuous_batching). It allows us to send tokens from multiple sequences through the model together. The benefit comes from using the weights loaded from memory for more tokens, increasing the arithmetic intensity of the problem.
+
+At this stage, every sequence has a `pending = len(request) - kv_valid` difference that depends on whether it had a prefix-cache hit. With some caveats (speculative decoding), this difference represents the number of tokens the sequence still needs to send through the model to compute their KV state.
+
+The engine has a fixed capacity for each model pass, which is 128 tokens in MTLQwen. A scheduling policy decides how to divide this capacity between sequences. Sequences with `pending = 1` are in the t.g stage and, with speculative decoding enabled, send `n_draft` tokens through the target model. Sequences with `pending > 1` are in the p.p stage, where the scheduler can adjust the size of each processed chunk. Prioritizing p.p favors TTFT, while prioritizing t.g improves throughput and ITL.
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260909152811594.png" alt="image" />
+<figcaption>Batch creation</figcaption>
+</figure>
+
+The scheduling policy I chose is simple: every live sequence advances on each step, which is possible because `max_slots * n_draft < 128`. Each t.g sequence (with spec decoding on) receives a `count` of `n_draft`, where `count` is the number of tokens it will compute. The remaining capacity is then divided equally between the p.p sequences. Each query also has a `state` property, which stores an offset into the candidates buffer. This buffer preserves the intermediate linear attention states produced while verifying proposed tokens (more on this later).
+
 ### Sparse K/V Memory Is Reserved
 *How the KV allocator does the corresponding physical mapping allocation now, only for the touched ranges, when each sequence needs it. Link to a Sparse Buffer deep dive.*
+
+
+
 ### The Drafter Proposes Tokens
 *How are drafter inputs packed to run in a single drafter forward pass. Probably put an image of the DFLASH architecture and showing how anchor, mask, mask, mask, anchor, mask, ... enter the packed batch*.
 
