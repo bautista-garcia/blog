@@ -29,14 +29,42 @@ The engine can receive requests from many kinds of frontends, whether they come 
 
 <figure>
 <img src="/blog/assets/images/image.png" alt="image" />
-<figcaption>multiturn chat</figcaption>
+<figcaption>Multiturn chat</figcaption>
 </figure>
 
-The resulting text is then [tokenized](https://platform.openai.com/tokenizer), producing the token IDs that are ready to enter the inference engine.
+The resulting text is then [tokenized](https://platform.openai.com/tokenizer), producing the token IDs ready to enter into the inference engine. When the frontend submits a request, represented as an array of token IDs, the engine assigns it to one of eight available slots. These slots determine the maximum number of requests that can be active concurrently.
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260908200252881.png" alt="image" width="391" />
+<figcaption>request assigned to a SLOT</figcaption>
+</figure>
+
+Each slot (also called Sequence in the code) contains the state the engine needs to process its assigned request. Its **`bindings table`** maps each part of the request’s KV cache to its location in physical memory, which we will explore in more detail later (Appendix A: Sparse Buffers). A **bank bit** tells the linear attention kernels which state buffer to read from and which one to write to, with the buffers alternating roles in a ping-pong pattern between forward passes. The **request** itself is an array of token IDs: it begins with the tokenized prompt and chat template, and each newly sampled token is appended to it. The **`kv_valid`** field records how many of those tokens already have valid KV state. During ordinary decoding, the most recently sampled token, also called the anchor token, has not yet passed through the model, so `kv_valid = len(request) - 1`. During speculative decoding, `kv_valid` also indicates how many proposed tokens were accepted by the target model and therefore have valid computed state. The **`busy`** flag indicates that some of the sequence’s tokens are currently participating in a forward pass, whereas **`active`** indicates that the sequence is live and still has work to perform. Finally, each sequence stores its generation settings, including the drafter width (proposed tokens per draft pass) and its sampling configuration. Together, these fields give the engine everything it needs to schedule the sequence, locate its state, and decode through the request.
 
 
-### Prefix Cache lookup
+
+### Prefix Cache 
 *How the engine performs a prefix cache lookup in order to restore previously computed state from a matching prefix.*
+
+Most LLM applications combine the user’s message with a system prompt and tool definitions before sending a request to the model. Because this content forms a shared prefix across requests, the engine can compute its state once and reuse it.
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260909011019448.png" alt="image" />
+<figcaption>Prefix cache</figcaption>
+</figure>
+
+The main design choice is the granularity at which prefixes are cached. Saving entries more frequently improves the hit rate but consumes more memory. Although Qwen 3.8’s linear-attention layers reduce the state required by each sequence, every cache entry still needs about 50 MiB to store the GatedDeltaNet state for all 24 layers. I currently use a 512-token interval as a reasonable tradeoff, though this value still needs to be tuned using real workload data.
+
+When a request enters a slot, the engine hashes its prefixes and performs a cache lookup. On a hit, it copies the cached GDN state into the slot’s buffer selected by `bank`, preventing the shared cache entry from being modified during decoding. The corresponding physical KV-cache bindings are then installed in the slot’s `bindings table`.
+
+
+
+
+
+
+
+
+
 ### The Scheduler Forms a Batch
 *How the scheduler grabs pending computation from multiple sequences to form a batch. How there is a scheduling policy which favors a metric in this case, but how it could favor others. What are the constraints here?*
 ### Sparse K/V Memory Is Reserved
@@ -62,3 +90,4 @@ The resulting text is then [tokenized](https://platform.openai.com/tokenizer), p
 ## Appendix B: Speculative Decoding
 ## Appendix C: Batched Attention
 ## Appendix D: Linear Attention
+## Appendix E: Attention vs Linear Attention Cache
