@@ -5,6 +5,8 @@ date: 2026-09-08
 tags: []
 draft: true
 ---
+import Sidenote from '../../components/Sidenote.astro';
+
 ## What is an Inference Engine
 *What is an inference engine, why is it needed. Huge catch up phrase for the reader to stay interested.*
 
@@ -83,11 +85,28 @@ The scheduling policy I chose is simple: every live sequence advances on each st
 ### Sparse K/V Memory Is Reserved
 *How the KV allocator does the corresponding physical mapping allocation now, only for the touched ranges, when each sequence needs it. Link to a Sparse Buffer deep dive.*
 
+At this point, we know how many tokens each sequence will send through the model, so we can determine how much KV-cache memory it needs. My engine allocates this memory in 128-token blocks. If `kv_valid + count` crosses a 128-token boundary, the engine requests a new physical block from the OS heap and binds it to the sequence’s virtual address space (see Appendix A: Sparse Buffers).
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260909202722421.png" alt="image" />
+<figcaption>KV Allocator</figcaption>
+</figure>
+
+This mapping is also recorded in the `bindings table`. The engine uses it when publishing a 512-token prefix to the prefix cache and when freeing physical blocks after a sequence ends. The kernels from this engine do not need to read this table, unlike engines such as vLLM. They access virtual memory directly, leaving the virtual-to-physical translation to the MMU.
 
 
 ### The Drafter Proposes Tokens
 *How are drafter inputs packed to run in a single drafter forward pass. Probably put an image of the DFLASH architecture and showing how anchor, mask, mask, mask, anchor, mask, ... enter the packed batch*.
 
+At this point, each sequence has the memory required for its next model pass. Its virtual-to-physical mappings are installed in the MMU and recorded in the sequence metadata, while `count` identifies how many request tokens it will compute. Each sequence also knows which GDN buffer to read from and write to. If it is using speculative decoding, it additionally knows where to store each verification token’s GDN state in the candidates buffer.
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260909204928165.png" alt="image" />
+<figcaption>Packed DFLASH drafter batch</figcaption>
+</figure>
+<Sidenote>The tokens shown in the DFLASH model diagram are illustrative and do not correspond to the input batch.</Sidenote>
+
+We first build a packed batch containing every Sequence that requires a drafter forward pass, identified by `state != unbound` (see the Batch Building section). Each Sequence follows the drafter’s input format: its anchor token (the last sampled token whose KV has not yet been computed) followed by `n_draft` mask tokens. The drafter then proposes `n_draft` tokens for each Sequence. These proposals are later combined with the tokens from those queries with `state = unbound` (speculative decoding off or p.p stage) to form the target-model batch.
 ### Inputs Are Packed for the GPU
 *How normal prompt processing tokens are put together with the drafter's proposals and how can we tell the GPU to differentiate tokens from each sequence (masking & batch attn)*.
 
