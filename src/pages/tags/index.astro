@@ -17,16 +17,19 @@ const tags = [...counts.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 ---
 
 <Base title="Tags">
-  <section class="intro">
-    <h1>Tags</h1>
+  <section class="intro page-intro">
+    <p class="eyebrow"><span aria-hidden="true"></span> Browse the archive</p>
+    <h1>Topics</h1>
+    <p>Ideas grouped by the systems, models, and performance questions they explore.</p>
   </section>
   <ul class="tag-list">
     {
       tags.map(([tag, count]) => (
         <li>
           <a href={href(`tags/${tag}`)}>{tag}</a>
-          <span class="count">
-            {count} {count === 1 ? 'post' : 'posts'}
+          <span class="tag-meta">
+            <span class="count">{count} {count === 1 ? 'post' : 'posts'}</span>
+            <span aria-hidden="true">↗</span>
           </span>
         </li>
       ))

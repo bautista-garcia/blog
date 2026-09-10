@@ -166,8 +166,17 @@ export function renderMarkdown(source) {
   }
 
   return DOMPurify.sanitize(html, {
-    ADD_ATTR: ['target'],
-    ADD_TAGS: ['annotation', 'math', 'mrow', 'semantics'],
+    ADD_ATTR: [
+      'autoplay',
+      'controls',
+      'loop',
+      'muted',
+      'playsinline',
+      'poster',
+      'preload',
+      'target',
+    ],
+    ADD_TAGS: ['annotation', 'math', 'mrow', 'semantics', 'source', 'video'],
   });
 }
 

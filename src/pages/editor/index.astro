@@ -19,9 +19,6 @@ const base = import.meta.env.BASE_URL;
     <meta name="theme-color" content="#f3f0e9" />
     <title>Writing studio · {site.name}</title>
     <link rel="icon" href={href('favicon.svg')} type="image/svg+xml" />
-    <script is:inline>
-      if (localStorage.getItem('theme') === 'dark') document.documentElement.dataset.theme = 'dark';
-    </script>
   </head>
   <body class="editor-body">
     <div
@@ -105,7 +102,6 @@ const base = import.meta.env.BASE_URL;
             <button id="btn-command" class="button command-button" type="button" aria-label="Open command menu">
               Commands <kbd>⌘ K</kbd>
             </button>
-            <button id="btn-theme" class="icon-button" type="button" aria-label="Toggle theme">◐</button>
             <button id="btn-save" class="button primary save-button" type="button">
               <span>Publish changes</span><kbd>⌘ S</kbd>
             </button>
@@ -209,7 +205,8 @@ const base = import.meta.env.BASE_URL;
               <details class="insert-menu">
                 <summary class="toolbar-summary">Insert <span aria-hidden="true">⌄</span></summary>
                 <div class="menu-card">
-                  <button data-command="image" type="button" aria-label="Insert image"><span>Image</span><small>Paste, drop, or upload</small></button>
+                  <button data-command="image" type="button" aria-label="Insert image or GIF"><span>Image or GIF</span><small>Paste, drop, or upload</small></button>
+                  <button data-command="video" type="button" aria-label="Insert video"><span>Video</span><small>MP4 or WebM</small></button>
                   <button data-command="diagram" type="button" aria-label="Insert Excalidraw diagram"><span>Excalidraw diagram</span><small>SVG with embedded scene</small></button>
                   <button data-command="table" type="button" aria-label="Insert table"><span>Table</span><small>GitHub-flavored Markdown</small></button>
                   <button data-command="math" type="button" aria-label="Insert equation"><span>Equation</span><small>Inline or display KaTeX</small></button>
@@ -241,7 +238,7 @@ const base = import.meta.env.BASE_URL;
             <div id="panes" data-mode="split">
               <section id="source-pane" aria-label="Markdown source">
                 <div id="editor-host"></div>
-                <div id="drop-indicator" aria-hidden="true">Drop an image to insert it</div>
+                <div id="drop-indicator" aria-hidden="true">Drop an image, GIF, or video to insert it</div>
               </section>
               <section id="preview-pane" aria-label="Rendered preview">
                 <article id="preview" class="prose"></article>
@@ -294,7 +291,7 @@ const base = import.meta.env.BASE_URL;
           <div id="asset-preview" class="asset-preview" hidden></div>
           <div class="field-grid">
             <label class="span-two"><span>File name</span><input id="asset-name" autocomplete="off" /></label>
-            <label><span>Alt text</span><input id="asset-alt" autocomplete="off" /></label>
+            <label><span id="asset-alt-label">Alt text</span><input id="asset-alt" autocomplete="off" /></label>
             <label><span>Width in pixels</span><input id="asset-width" type="number" min="50" placeholder="Auto" /></label>
             <label class="span-two"><span>Caption</span><input id="asset-caption" autocomplete="off" placeholder="Optional" /></label>
           </div>

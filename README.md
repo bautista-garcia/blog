@@ -14,7 +14,7 @@ From there the editor works like a small, GitHub-backed writing app:
 - **Publishing metadata** — title, description, slug, date, tags, draft status, plus a raw field for additional frontmatter. `Cmd/Ctrl+S` publishes the change as a GitHub commit.
 - **Safe recovery and history** — unpublished work is recovered from browser storage. Published posts expose their Git commit history and any earlier version can be restored into the editor before republishing.
 - **Post management** — search the library, filter published posts and drafts, rename via the slug, create, export, or delete posts.
-- **Images & Excalidraw diagrams** — use the insert menu, or paste/drop directly into the editor. Excalidraw's copied SVG markup is recognized automatically, its canvas is made transparent, and legacy drawings blend into either site theme. Resize any image by selecting it in preview and dragging the ↔ handle (arrow keys work too), or choose **Auto** to reset it. Files are committed to `public/assets/` with unique, collision-safe names.
+- **Images, GIFs, videos & Excalidraw diagrams** — use the insert menu, or paste/drop directly into the editor. Videos use compact, native MP4/WebM playback; GIFs use the image flow. Excalidraw's copied SVG markup is recognized automatically, its canvas is made transparent, and legacy drawings blend into the page. Resize any image by selecting it in preview and dragging the ↔ handle (arrow keys work too), or choose **Auto** to reset it. Files are committed to `public/assets/` with unique, collision-safe names.
 - **Import from Obsidian** — import a `.md` file with its images. `![[embeds]]`, `[[wikilinks]]`, frontmatter, widths, and captions are converted; missing files are reported before import.
 
 The editor code is deliberately split by responsibility so changes stay approachable:
@@ -53,7 +53,7 @@ Saving pushes a commit, so the GitHub Action rebuilds and the change is live in 
 
 **Diagrams (Excalidraw):** export SVG from excalidraw.com (tick "Embed scene"), save to `src/assets/diagrams/`, embed with a relative path: `![alt](../../assets/diagrams/foo.svg)`. (Or just use the editor, which handles upload + sizing for you.)
 
-**Dark mode:** manual toggle in the nav (default: light), persisted in `localStorage`. Sidenotes float in the margin on desktop; on mobile they expand inline via the number and are also listed at the end of the post.
+Sidenotes float in the margin on desktop; on mobile they expand inline via the number and are also listed at the end of the post.
 
 ## Local development
 

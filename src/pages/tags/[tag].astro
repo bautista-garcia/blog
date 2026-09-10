@@ -25,8 +25,10 @@ const { tag, posts } = Astro.props;
 ---
 
 <Base title={`#${tag}`}>
-  <section class="intro">
-    <h1>#{tag}</h1>
+  <section class="intro page-intro compact-intro">
+    <p class="eyebrow"><span aria-hidden="true"></span> Topic</p>
+    <h1>{tag}</h1>
+    <p>{posts.length} {posts.length === 1 ? 'blog' : 'blogs'} filed here.</p>
   </section>
 
   <ul class="post-list">
@@ -39,9 +41,7 @@ const { tag, posts } = Astro.props;
             </time>
           </div>
           <div class="post-summary">
-            <h2>
-              <a href={href(`posts/${post.id}`)}>{post.data.title}</a>
-            </h2>
+            <h2><a href={href(`posts/${post.id}`)}><span>{post.data.title}</span><span class="post-arrow" aria-hidden="true">↗</span></a></h2>
             <p>{post.data.description ?? getExcerpt(post.body ?? '')}</p>
           </div>
         </li>

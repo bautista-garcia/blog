@@ -190,11 +190,9 @@ function initMarkdownEditor() {
       updateStats(markdownEditor.getValue(), selection);
     },
     onFiles(files, source) {
-      const file = files.find((candidate) =>
-        candidate.type.startsWith('image/') || /\.svg$/i.test(candidate.name),
-      );
+      const file = files.find((candidate) => mediaKindForFile(candidate));
       if (!file) return false;
-      openAssetDialog(/\.svg$/i.test(file.name) ? 'diagrams' : 'images', file, source);
+      openAssetDialog(mediaKindForFile(file), file, source);
       return true;
     },
     onSvgPaste(svg) {
@@ -230,7 +228,7 @@ function initMarkdownEditor() {
 }
 
 function setDocument(values, body, options = {}) {
-  clearImageCache();
+  clearAssetCache();
   loadingDocument = true;
   elements.title.value = values.title || '';
   elements.description.value = values.description || '';
@@ -448,7 +446,7 @@ function renderPreview() {
   });
   renderOutline();
   installPreviewImageControls();
-  hydratePreviewImages();
+  hydratePreviewMedia();
 }
 
 function rewriteImageWidth(source, targetSource, targetOccurrence, width) {
@@ -594,7 +592,7 @@ function installPreviewImageControls() {
   }
 }
 
-const imageCache = new Map();
+const assetCache = new Map();
 const MIME = {
   svg: 'image/svg+xml',
   png: 'image/png',
@@ -603,19 +601,37 @@ const MIME = {
   gif: 'image/gif',
   webp: 'image/webp',
   avif: 'image/avif',
+  mp4: 'video/mp4',
+  webm: 'video/webm',
 };
 
-function clearImageCache() {
-  for (const value of imageCache.values()) {
+function clearAssetCache() {
+  for (const value of assetCache.values()) {
     if (value.startsWith('blob:')) URL.revokeObjectURL(value);
   }
-  imageCache.clear();
+  assetCache.clear();
 }
 
-function cacheLocalImage(path, file) {
-  const previous = imageCache.get(path);
+function cacheLocalAsset(path, file) {
+  const previous = assetCache.get(path);
   if (previous?.startsWith('blob:')) URL.revokeObjectURL(previous);
-  imageCache.set(path, URL.createObjectURL(file));
+  assetCache.set(path, URL.createObjectURL(file));
+}
+
+function mediaKindForFile(file) {
+  if (/^video\/(?:mp4|webm)$/i.test(file.type) || /\.(?:mp4|webm)$/i.test(file.name)) {
+    return 'videos';
+  }
+  if (file.type.startsWith('image/') || /\.svg$/i.test(file.name)) {
+    return /\.svg$/i.test(file.name) ? 'diagrams' : 'images';
+  }
+  return '';
+}
+
+function assetLabel(kind) {
+  if (kind === 'videos') return 'video';
+  if (kind === 'diagrams') return 'diagram';
+  return 'image';
 }
 
 function suffixFilename(name, number) {
@@ -627,7 +643,7 @@ function suffixFilename(name, number) {
 function pastedAssetFilename(file, kind) {
   const extension = file.name.match(/\.[a-z0-9]+$/i)?.[0].toLowerCase() || '.png';
   const stamp = new Date().toISOString().replace(/\D/g, '').slice(0, 17);
-  return `pasted-${kind === 'diagrams' ? 'diagram' : 'image'}-${stamp}${extension}`;
+  return `pasted-${assetLabel(kind)}-${stamp}${extension}`;
 }
 
 async function findUnusedAssetPath(kind, requestedName, reservedPaths = new Set()) {
@@ -642,7 +658,7 @@ async function findUnusedAssetPath(kind, requestedName, reservedPaths = new Set(
       throw error;
     }
   }
-  throw new Error('Could not find an unused file name for this image.');
+  throw new Error(`Could not find an unused file name for this ${assetLabel(kind)}.`);
 }
 
 async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set()) {
@@ -657,14 +673,16 @@ async function uploadNewAsset(kind, file, requestedName, reservedPaths = new Set
         `Add ${kind.slice(0, -1)}: ${destination.name}`,
       );
       reservedPaths.add(destination.path);
-      cacheLocalImage(destination.path, preparedFile);
+      cacheLocalAsset(destination.path, preparedFile);
       return destination;
     } catch (error) {
       // A concurrent upload can claim the name between the availability check and commit.
       if (error.status !== 409 && error.status !== 422) throw error;
     }
   }
-  throw new Error('The image name changed on GitHub while uploading. Please try again.');
+  throw new Error(
+    `The ${assetLabel(kind)} name changed on GitHub while uploading. Please try again.`,
+  );
 }
 
 async function prepareAssetForUpload(kind, file) {
@@ -686,35 +704,38 @@ function publicAssetUrl(path) {
   return `${BASE}${path.replace(/^public\//, '')}`;
 }
 
-async function hydratePreviewImages() {
-  for (const image of elements.preview.querySelectorAll('img')) {
-    const source = image.getAttribute('src') || '';
+async function hydratePreviewMedia() {
+  for (const media of elements.preview.querySelectorAll('img, video')) {
+    const source = media.getAttribute('src') || '';
     let path = null;
     if (source.startsWith(`${BASE}assets/`)) path = `public/${source.slice(BASE.length)}`;
     else if (source.startsWith('../../assets/')) path = `src/${source.slice('../../'.length)}`;
     if (!path) continue;
     if (path.includes('/assets/diagrams/') && /\.svg$/i.test(path)) {
-      image.classList.add('excalidraw-diagram');
+      media.classList.add('excalidraw-diagram');
     }
 
     const pending = pendingAssets.get(path);
     if (pending) {
-      if (!imageCache.has(path)) imageCache.set(path, URL.createObjectURL(pending));
-      image.src = imageCache.get(path);
+      if (!assetCache.has(path)) assetCache.set(path, URL.createObjectURL(pending));
+      media.src = assetCache.get(path);
       continue;
     }
-    if (imageCache.has(path)) {
-      image.src = imageCache.get(path);
+    if (assetCache.has(path)) {
+      media.src = assetCache.get(path);
       continue;
     }
+    // Existing videos are served by the deployed site. Avoid downloading large
+    // binaries through the GitHub Contents API just to construct a preview URL.
+    if (media instanceof HTMLVideoElement) continue;
     try {
       const file = await client.getFile(path);
       const mime = MIME[path.split('.').pop().toLowerCase()] || 'application/octet-stream';
       const url = `data:${mime};base64,${file.content.replace(/\n/g, '')}`;
-      imageCache.set(path, url);
-      image.src = url;
+      assetCache.set(path, url);
+      media.src = url;
     } catch {
-      // Leave unresolved images untouched; their path remains useful for editing.
+      // Leave unresolved media untouched; its path remains useful for editing.
     }
   }
 }
@@ -776,7 +797,7 @@ async function savePost() {
       const reservedPaths = new Set();
       let visibleBody = markdownEditor.getValue();
       for (const [assetPath, asset] of [...pendingAssets]) {
-        flashStatus(`Uploading image ${uploaded + 1} of ${totalAssets}…`, '', 0);
+        flashStatus(`Uploading media ${uploaded + 1} of ${totalAssets}…`, '', 0);
         const match = assetPath.match(/^public\/assets\/([^/]+)\/(.+)$/);
         if (!match) throw new Error(`Unsupported asset path: ${assetPath}`);
         const destination = await uploadNewAsset(match[1], asset, match[2], reservedPaths);
@@ -903,6 +924,7 @@ function runEditorCommand(command) {
   if (command === 'undo') markdownEditor.undo();
   else if (command === 'redo') markdownEditor.redo();
   else if (command === 'image') openAssetDialog('images');
+  else if (command === 'video') openAssetDialog('videos');
   else if (command === 'diagram') openAssetDialog('diagrams');
   else markdownEditor.format(command);
 }
@@ -912,13 +934,6 @@ function toggleFocus() {
   $('btn-focus').classList.toggle('active', active);
   $('btn-focus').setAttribute('aria-pressed', String(active));
   requestAnimationFrame(() => markdownEditor.focus());
-}
-
-function toggleTheme() {
-  const dark = document.documentElement.dataset.theme === 'dark';
-  if (dark) delete document.documentElement.dataset.theme;
-  else document.documentElement.dataset.theme = 'dark';
-  localStorage.setItem('theme', dark ? 'light' : 'dark');
 }
 
 function openSidebar() {
@@ -942,12 +957,22 @@ const assetError = $('asset-error');
 
 function openAssetDialog(kind, file = null, source = 'upload') {
   assetState = { kind, file: null, source };
-  $('asset-title').textContent = kind === 'diagrams' ? 'Insert an Excalidraw diagram' : 'Insert an image';
+  const video = kind === 'videos';
+  $('asset-title').textContent =
+    kind === 'diagrams'
+      ? 'Insert an Excalidraw diagram'
+      : video
+        ? 'Insert a video'
+        : 'Insert an image or GIF';
   $('asset-hint').textContent =
     kind === 'diagrams'
       ? 'Export the drawing as SVG with “Embed scene” enabled so you can edit it again later.'
-      : 'PNG, JPG, GIF, WebP, AVIF, and SVG are supported.';
+      : video
+        ? 'MP4 (H.264) and WebM work across modern browsers. Short, compressed clips load best.'
+        : 'PNG, JPG, GIF, WebP, AVIF, and SVG are supported.';
   $('asset-excalidraw').hidden = kind !== 'diagrams';
+  assetFile.accept = video ? 'video/mp4,video/webm,.mp4,.webm' : 'image/*,.svg';
+  $('asset-alt-label').textContent = video ? 'Accessible label' : 'Alt text';
   assetFile.value = '';
   assetName.value = '';
   assetAlt.value = '';
@@ -962,8 +987,14 @@ function openAssetDialog(kind, file = null, source = 'upload') {
 }
 
 function setAssetFile(file) {
-  if (!file.type.startsWith('image/') && !/\.svg$/i.test(file.name)) {
-    assetError.textContent = 'Choose an image or SVG file.';
+  const actualKind = mediaKindForFile(file);
+  if (!actualKind || (assetState.kind === 'videos') !== (actualKind === 'videos')) {
+    assetError.textContent =
+      assetState.kind === 'videos' ? 'Choose an MP4 or WebM video.' : 'Choose an image or SVG file.';
+    return;
+  }
+  if (actualKind === 'videos' && file.size > 50 * 1024 * 1024) {
+    assetError.textContent = 'Keep repository-hosted videos below 50 MB, or host this clip externally.';
     return;
   }
   assetState.file = file;
@@ -977,13 +1008,19 @@ function setAssetFile(file) {
       : sanitizedName;
   assetAlt.value ||= file.name.replace(/\.[^.]+$/, '').replace(/[-_]+/g, ' ');
   assetPreview.replaceChildren();
-  const image = document.createElement('img');
-  image.src = URL.createObjectURL(file);
-  image.alt = '';
-  if (assetState.kind === 'diagrams' && /\.svg$/i.test(file.name)) {
-    image.classList.add('excalidraw-diagram');
+  const media = document.createElement(assetState.kind === 'videos' ? 'video' : 'img');
+  media.src = URL.createObjectURL(file);
+  if (media instanceof HTMLVideoElement) {
+    media.controls = true;
+    media.muted = true;
+    media.playsInline = true;
+  } else {
+    media.alt = '';
   }
-  assetPreview.append(image);
+  if (assetState.kind === 'diagrams' && /\.svg$/i.test(file.name)) {
+    media.classList.add('excalidraw-diagram');
+  }
+  assetPreview.append(media);
   assetPreview.hidden = false;
   assetInsert.disabled = false;
   assetError.textContent = '';
@@ -997,7 +1034,9 @@ async function insertAsset(event) {
   try {
     let name = sanitizeFilename(assetName.value.trim() || assetState.file.name);
     if (!/\.[a-z0-9]+$/i.test(name)) {
-      name += assetState.file.name.match(/\.[a-z0-9]+$/i)?.[0] || '.png';
+      name +=
+        assetState.file.name.match(/\.[a-z0-9]+$/i)?.[0] ||
+        (assetState.kind === 'videos' ? '.mp4' : '.png');
     }
     const destination = await uploadNewAsset(assetState.kind, assetState.file, name);
     name = destination.name;
@@ -1005,15 +1044,20 @@ async function insertAsset(event) {
     const width = assetWidth.value ? ` width="${Number(assetWidth.value)}"` : '';
     const alt = escapeAttribute(assetAlt.value.trim());
     const caption = escapeAttribute(assetCaption.value.trim());
-    const image = `<img src="${BASE}assets/${assetState.kind}/${name}" alt="${alt}"${width} />`;
+    const assetUrl = `${BASE}assets/${assetState.kind}/${name}`;
+    const media =
+      assetState.kind === 'videos'
+        ? `<video src="${assetUrl}" controls playsinline preload="metadata" aria-label="${alt}"${width}></video>`
+        : `<img src="${assetUrl}" alt="${alt}"${width} />`;
     markdownEditor.insertBlock(
-      caption ? `<figure>\n${image}\n<figcaption>${caption}</figcaption>\n</figure>` : image,
+      caption ? `<figure>\n${media}\n<figcaption>${caption}</figcaption>\n</figure>` : media,
     );
     assetDialog.close();
+    const label = assetLabel(assetState.kind);
     flashStatus(
       destination.renamed
-        ? `Image saved as ${name} so an existing asset was not replaced.`
-        : 'Image uploaded and inserted.',
+        ? `${label[0].toUpperCase()}${label.slice(1)} saved as ${name} so an existing asset was not replaced.`
+        : `${label[0].toUpperCase()}${label.slice(1)} uploaded and inserted.`,
       'success',
     );
   } catch (error) {
@@ -1197,7 +1241,8 @@ const commands = [
   { section: 'Formatting', name: 'Bold', icon: 'B', keys: '⌘ B', run: () => runEditorCommand('bold') },
   { section: 'Formatting', name: 'Link', icon: '↗', run: () => runEditorCommand('link') },
   { section: 'Formatting', name: 'Code block', icon: '<>', run: () => runEditorCommand('codeblock') },
-  { section: 'Insert', name: 'Image', icon: '▧', run: () => openAssetDialog('images') },
+  { section: 'Insert', name: 'Image or GIF', icon: '▧', run: () => openAssetDialog('images') },
+  { section: 'Insert', name: 'Video', icon: '▶', run: () => openAssetDialog('videos') },
   { section: 'Insert', name: 'Excalidraw diagram', icon: '◇', run: () => openAssetDialog('diagrams') },
   { section: 'Insert', name: 'Table', icon: '#', run: () => runEditorCommand('table') },
   { section: 'Insert', name: 'Equation', icon: '∑', run: () => runEditorCommand('math') },
@@ -1263,7 +1308,6 @@ $('btn-shortcuts').addEventListener('click', () => {
   $('shortcuts-dialog').showModal();
 });
 $('btn-command').addEventListener('click', openCommandDialog);
-$('btn-theme').addEventListener('click', toggleTheme);
 $('btn-focus').addEventListener('click', toggleFocus);
 $('btn-sidebar').addEventListener('click', () =>
   root.classList.contains('sidebar-open') ? closeSidebar() : openSidebar(),

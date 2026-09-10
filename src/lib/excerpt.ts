@@ -1,15 +1,5 @@
-/**
- * Derive a plain-text excerpt from a post's raw Markdown/MDX body:
- * the first block, with inline markup stripped.
- */
-export function getExcerpt(body: string): string {
-  const withoutImports = body.replace(/^import\s.*$/gm, '');
-  const firstBlock =
-    withoutImports
-      .split(/\n\s*\n/)
-      .map((block) => block.trim())
-      .find((block) => block.length > 0) ?? '';
-  return firstBlock
+function plainText(block: string): string {
+  return block
     .replace(/<Sidenote[\s\S]*?<\/Sidenote>/g, '')
     .replace(/<[^>]+>/g, '')
     .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
@@ -25,4 +15,20 @@ export function getExcerpt(body: string): string {
     .replace(/[*_`~]/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+/** Derive a short card excerpt from the first prose paragraph in a post. */
+export function getExcerpt(body: string): string {
+  const firstParagraph = body
+    .replace(/^import\s.*$/gm, '')
+    .replace(/^#{1,6}\s+.*$/gm, '')
+    .split(/\n\s*\n/)
+    .map((block) => block.trim())
+    .filter((block) => block && !/^(?:\$\$|<figure|<img|<video)/i.test(block))
+    .map(plainText)
+    .find(Boolean) ?? '';
+
+  if (firstParagraph.length <= 190) return firstParagraph;
+  const shortened = firstParagraph.slice(0, 190).replace(/\s+\S*$/, '').replace(/[,:;.!?]?$/, '');
+  return `${shortened}…`;
 }

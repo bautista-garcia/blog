@@ -1,0 +1,20 @@
+---
+import Base from '../layouts/Base.astro';
+import { href } from '../lib/url';
+---
+
+<Base title="About">
+  <section class="about-page">
+    <p class="eyebrow"><span aria-hidden="true"></span> About</p>
+    <h1>Bautista Garcia</h1>
+    <div class="about-copy">
+      <p>
+        I’m a computer engineer optimizing LLM systems end to end. Currently working on inference
+        engines and optimizing GPU kernels for multiple backends (Metal, NVIDIA and AMD).
+      </p>
+      <a class="cv-link" href={href('assets/bautista-garcia-resume.pdf')} download>
+        Download my CV <span aria-hidden="true">↓</span>
+      </a>
+    </div>
+  </section>
+</Base>
