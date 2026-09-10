@@ -160,6 +160,13 @@ At this point, one engine step is complete. The engine can accept new requests i
 
 ## Design Tradeoffs and Current Limitations
 
+- The current 512-token prefix granularity gets few hits because the prefixes are too long. Shorter intervals would improve the hit rate but make memory usage explode. One possible solution is to publish shorter prefixes only up to `request[max_prefix]`, where the data says reuse is more likely.
+
+- The engine currently supports Qwen 3.8 and 3.5, which share the same architecture. Supporting more models should be straightforward, with new kernels required only when an architecture introduces different operations, such as Kimi’s linear attention or DeepSeek’s MLA. Sliding-window attention is probably the next addition, since more models are adopting it.
+
+- I still need to tune the current 128-token block size. Smaller blocks waste less memory when partially filled but require more frequent allocations, while larger blocks reduce allocation overhead at the cost of more unused memory.
+
+
 ## Appendix A: Sparse Buffers
 ## Appendix B: Speculative Decoding
 ## Appendix C: Batched Attention
