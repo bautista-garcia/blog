@@ -8,13 +8,11 @@ draft: true
 import Sidenote from '../../components/Sidenote.astro';
 
 ## What is an Inference Engine
-*What is an inference engine, why is it needed. Huge catch up phrase for the reader to stay interested.*
 
 A definition I use for inference engines is that they are the orchestration layer of the complete LLM workflow. They handle the memory LLMs need, whether in permanent buffers, such as weights, or “temporary” ones, such as caches. They also handle the compute an LLM performs by orchestrating the execution of all its kernels. Finally, they make it possible to run this workflow for multiple requests concurrently, extracting more performance from these models.
 
 
 ## Why I built MTLQwen?
-*Explain what type of inference engine is MTLQwen and what constraints does it have (device, model, memory). What am I looking for by building this? , what can you optimize here that will bring more performance to the table?*
 
 MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 architectures, focusing on Metal backend for Apple GPUs. It started as a project to learn how inference engines work, but as I went deeper, I realized that specializing it for Qwen and Metal could provide more performance than general-purpose inference engines (vLLM or llama.cpp) on this specific model family and hardware. By using Metal specific features and optimizing Qwen’s kernels, MTLQwen ended up outperforming llama.cpp at both batch size 1 and in aggregate throughput, with a further 30% speedup when using DFlash.
 
@@ -25,7 +23,6 @@ MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 arc
 *Here I could talk about the mmap, how it chooses the kernels each linear will run based on the shape and quant dtype of the weights and how it builds the RoPE tables.*
 
 ### A Request Becomes a Sequence
-*Explain what responsibilities I hand to the frontend. In this case it could be a simple multiturn chat or a tui. How they should apply chat template, concat multiturn and tokenize. How it can track the request progress with len(cursor) vs len(request). Make a good descripion of sequence/slots and every piece of state it owns, what does it mean, and what it can derive from it.*
 
 The engine can receive requests from many kinds of frontends, whether they come from a multi-turn chat, an agentic TUI, or any other interface. The frontend is responsible for applying the model’s chat template and concatenating the conversation’s messages:
 
@@ -46,7 +43,6 @@ Each slot (also called Sequence in the code) contains the state the engine needs
 
 
 ### Prefix Cache 
-*How the engine performs a prefix cache lookup in order to restore previously computed state from a matching prefix.*
 
 Most LLM applications combine the user’s message with a system prompt and tool definitions before sending a request to the model. Because this content forms a shared prefix across requests, the engine can compute its state once and reuse it.
 
@@ -67,7 +63,6 @@ With the prefix cache in place, we can return to what happens when a request ent
 </figure>
 
 ### The Scheduler Forms a Batch
-*How the scheduler grabs pending computation from multiple sequences to form a batch. How there is a scheduling policy which favors a metric in this case, but how it could favor others. What are the constraints here?*
 
 If we processed each sequence one at a time, we would not get any benefit from supporting concurrent requests. The aggregate speed, meaning the sum of all sequence speeds, would be at most the speed of a single request running in isolation. That is why we want to apply [Continuous Batching](https://huggingface.co/blog/continuous_batching). It allows us to send tokens from multiple sequences through the model together. The benefit comes from using the weights loaded from memory for more tokens, increasing the arithmetic intensity of the problem.
 
@@ -83,7 +78,6 @@ The engine has a fixed capacity for each model pass, which is 128 tokens in MTLQ
 The scheduling policy I chose is simple: every live sequence advances on each step, which is possible because `max_slots * n_draft < 128`. Each t.g sequence (with spec decoding on) receives a `count` of `n_draft`, where `count` is the number of tokens it will compute. The remaining capacity is then divided equally between the p.p sequences. Each query also has a `state` property, which stores an offset into the candidates buffer. This buffer preserves the intermediate linear attention states produced while verifying proposed tokens (more on this later).
 
 ### Sparse K/V Memory Is Reserved
-*How the KV allocator does the corresponding physical mapping allocation now, only for the touched ranges, when each sequence needs it. Link to a Sparse Buffer deep dive.*
 
 At this point, we know how many tokens each sequence will send through the model, so we can determine how much KV-cache memory it needs. My engine allocates this memory in 128-token blocks. If `kv_valid + count` crosses a 128-token boundary, the engine requests a new physical block from the OS heap and binds it to the sequence’s virtual address space (see Appendix A: Sparse Buffers).
 
@@ -96,7 +90,6 @@ This mapping is also recorded in the `bindings table`. The engine uses it when p
 
 
 ### The Drafter Proposes Tokens
-*How are drafter inputs packed to run in a single drafter forward pass. Probably put an image of the DFLASH architecture and showing how anchor, mask, mask, mask, anchor, mask, ... enter the packed batch*.
 
 At this point, each sequence has the memory required for its next model pass. Its virtual-to-physical mappings are installed in the MMU and recorded in the sequence metadata, while `count` identifies how many request tokens it will compute. Each sequence also knows which GDN buffer to read from and write to. If it is using speculative decoding, it additionally knows where to store each verification token’s GDN state in the candidates buffer.
 
@@ -107,8 +100,7 @@ At this point, each sequence has the memory required for its next model pass. It
 <Sidenote>The tokens shown in the DFLASH model diagram are illustrative and do not correspond to the input batch.</Sidenote>
 
 We first build a packed batch containing every Sequence that requires a drafter forward pass, identified by `state != unbound` (see the Batch building section). Each Sequence follows the drafter’s input format: its anchor token (the last sampled token whose KV has not yet been computed) followed by `n_draft` mask tokens. The drafter then proposes `n_draft` tokens for each Sequence. These proposals are later combined with the tokens from those queries with `state = unbound` (speculative decoding off or p.p stage) to form the target-model batch.
-### Inputs Are Packed for the GPU
-*How normal prompt processing tokens are put together with the drafter's proposals and how can we tell the GPU to differentiate tokens from each sequence (masking & batch attn)*.
+
 ### Inputs Are Packed for the GPU
 
 Now that we have the drafter proposals and the remaining target queries, we can pack the input batch and build the metadata the model needs to correctly process these tokens. As shown in this [Continuous Batching](https://huggingface.co/blog/continuous_batching) explanation, the attention kernels must prevent tokens from interacting across Sequence boundaries. For this, we build `queryStartLoc`, where `queryStartLoc[i]` gives the starting offset of Sequence `i` in the packed `inputIds`. The final entry marks where the packed input ends.
@@ -121,24 +113,45 @@ Now that we have the drafter proposals and the remaining target queries, we can 
 `sequenceSlots[i]` and `batchedKvValid[i]` locate each Sequence’s existing KV state. `sequenceSlots[i]` identifies its slot, while `batchedKvValid[i]` gives the offset where the new KV computation begins. Everything in `[0, kv_valid)` has already been computed and is used as attention context.
 
 ### The Target Model Runs
-*Image of the Qwen 3.5 architecture, saying that here you have the possibility to tune how the model run as much as you want. You can fuse and optimize layers, because the engine owns the kernels.*
 
 At this point, the packed `inputIds` and all the metadata needed to keep each Sequence isolated are ready, so we can run the target model. The kernels need to implement the Qwen 3.8 architecture shown below, as long as their results remain within a reasonable numerical tolerance of a reference Qwen implementation (could be in PyTorch or tinygrad) and they handle the intersequence masking described previously, each part of the architecture can be implemented however we want. This means I can choose how each operation is implemented and which operations are fused together. Since the model runs on a native Metal C++ backend I built, I can profile these kernels through native `.gputrace` and iterate them until reaching a very good performance level.
-
+<Sidenote>Most of the performance gains in my engine came from optimizing the quantized linear kernels, which dominate runtime on each forward pass, alongside a decode optimized FlashAttention 2 kernel and a chunked parallel scan that computes the GatedDeltaNet state in 32-token blocks for p.p sequences. *More on these kernel optimizations in a future blog*.</Sidenote>
 
 <figure>
 <img src="/blog/assets/images/pasted-image-20260910021531715.png" alt="image" width="469" />
 <figcaption>Qwen Architecture (Sebastian Raschka diagram)</figcaption>
 </figure>
 
-In my engine, most of the performance gains came from optimizing the quantized linear kernels, since they account for most of the computation in each forward pass. Other important optimizations were a decode optimized version of FlashAttention 2 and a chunked parallel scan that computes the GatedDeltaNet state in blocks of 32 tokens for p.p sequences. *More about the kernel optimizations on a future blog.*
-
+Once the packed batch has run through these kernels, we have the target samples needed to verify the drafter proposals, along with the KV cache and GDN state computed for every Sequence in the batch.
 
 ### State is injected to the drafter
-*How do we inject the target's state into the drafter.*
+
+As shown in the packed DFlash pass, the drafter relies on context produced by the target model. During each target pass, besides updating the target KV cache and sampling where required, we encode this context into the drafter’s cache.
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260910141754697.png" alt="image" width="508" />
+<figcaption>Drafter context injection</figcaption>
+</figure>
+
+For every processed token $t$, we capture the target hidden states after layers 2, 6, 10, 14, 18, 22, 26, and 30. These are concatenated and projected down to the drafter’s hidden dimension, producing the context representation $H_{\text{ctx},t}$.
+
+Each of DFlash’s six attention layers projects $H_{\text{ctx},t}$ into its own $K_{\text{ctx}},V_{\text{ctx}}$. These are stored in the same physical cache bundles as the target KV and addressed by `(sequence slot, token position)` (see Appendix A). During drafting, the cached context K/V is attended together with the temporary K/V produced by the packed anchor and mask tokens.
 
 ### Tokens and State Are Committed
-*How do we compare drafter vs targets, how this will be improved in the future (by removing greedy argmax). And what happens on a commit, how do we copy state from candidates buffer into the GDN state (why do we need this candidates state?) each slot owns and how does the frontend know that its request is ready to be streamed. Prefix publication once 512 token boundary is reached.* 
+
+For Sequences using speculative decoding, we first compare each drafter proposal with the corresponding target sample. My engine uses greedy decoding, so a proposal is accepted only when both tokens are equal. [Sampling-based verification](https://proceedings.mlr.press/v202/leviathan23a.html) instead draws `u ~ U(0,1)` and accepts with probability `min(1, p_k / q_k)`. This can accept proposals based on probability overlap rather than exact equality, but requires retaining `vocab_size` probability distributions for each proposed token until verification and resampling ends. <Sidenote>I still need to evaluate whether the higher acceptance rate is worth this memory cost.</Sidenote> We then commit the accepted prefix by advancing `kv_valid` by the number of accepted tokens. With greedy decoding, the target sample at the first mismatch becomes the new anchor and is appended to `request` for the next forward pass.
+<figure>
+<img src="/blog/assets/images/pasted-image-20260910150856258.png" alt="image" />
+<figcaption>Compare &amp; Commit state</figcaption>
+</figure>
+
+This is where the purpose of the `candidateStates` buffer mentioned in the Batch Building section becomes clear. In linear-attention models, the memory is a fixed-size matrix updated in place as tokens pass through the model. If we wrote the final state directly into the slot and then rejected the last proposal, that state would still include an unaccepted token. In the figure, rejecting D would leave us with an invalid state. Instead, we save the state after each proposal in `candidateStates`, then copy only the state after the last accepted proposal into the slot’s GDN buffer selected by `bank`. If C is the last accepted proposal, we commit the state produced after C.
+
+Tokens from p.p queries and t.g queries with speculative decoding disabled advance without verification. For a p.p Sequence, every token processed in this pass is already part of `request`, so `kv_valid` advances by `count`. For a non-speculative t.g Sequence, the previous anchor now has its KV computed, so `kv_valid` advances by one and the target sample is appended to `request` as the new anchor.
+
+Every Sequence that crosses a 512-token boundary then extends its prefix hash with the newly completed 512-token chunk and publishes an entry to the prefix cache. This entry contains the GDN state after the final token in that prefix, together with all the KV-cache bindings needed to restore it in another slot.
+
+At this point, one engine step is complete. The engine can accept new requests into available slots and send the remaining live Sequences back through the loop until the request ends.
 
 ## Design Tradeoffs and Current Limitations
 
