@@ -95,10 +95,8 @@ function renderCard({ title, date, tags }: SocialCardProps) {
         <path d="M1080 120V552" />
       </g>
 
-      <circle cx="78" cy="70" r="5" fill="#992f20" />
-      <text x="96" y="77" fill="#992f20" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="4">BAUTISTA GARCIA</text>
-      <text x="1124" y="77" text-anchor="end" fill="#72746c" font-family="Arial, sans-serif" font-size="17" font-weight="600" letter-spacing="3">ENGINEERING NOTES</text>
-      <path d="M76 108H1124" stroke="#992f20" stroke-width="2" />
+      <path d="M76 70H118" stroke="#992f20" stroke-width="2" />
+      <text x="136" y="77" fill="#992f20" font-family="Arial, sans-serif" font-size="18" font-weight="700" letter-spacing="4">ENGINEERING NOTE</text>
 
       <text fill="#171916" font-family="Georgia, 'Times New Roman', serif" font-size="${fontSize}" font-weight="600" letter-spacing="-2">${titleMarkup}</text>
 

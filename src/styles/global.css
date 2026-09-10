@@ -708,11 +708,7 @@ main.wide {
 }
 
 body:not(.editor-body) .prose > figure {
-  --figure-width: min(54rem, calc(100vw - 2.5rem));
-  position: relative;
-  left: 50%;
-  width: var(--figure-width);
-  transform: translateX(-50%);
+  width: min(54rem, calc(100vw - 2.5rem));
 }
 
 .prose figure img,
@@ -1159,10 +1155,7 @@ input.sidenote-toggle {
   }
 
   body:not(.editor-body) .prose > figure {
-    --figure-width: 100%;
-    left: 0;
     width: 100%;
-    transform: none;
   }
 
   .prose pre {
