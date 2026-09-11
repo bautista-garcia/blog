@@ -9,6 +9,13 @@ import Sidenote from '../../components/Sidenote.astro';
 
 ## What is an Inference Engine
 
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260911162430345.png" alt="image" />
+<figcaption>Inference Engine: end to end</figcaption>
+</figure>
+
+
 A definition I use for inference engines is that they are the orchestration layer of the complete LLM workflow. They handle the memory LLMs need, whether in permanent buffers, such as weights, or “temporary” ones, such as caches. They also handle the compute an LLM performs by orchestrating the execution of all its kernels. Finally, they make it possible to run this workflow for multiple requests concurrently, extracting more performance from these models.
 
 
