@@ -58,7 +58,7 @@ The prefix cache stores checkpoints of this state for progressively longer token
 <figcaption>Prefix cache</figcaption>
 </figure>
 
-The main design choice is the granularity at which prefixes are cached. Saving entries more frequently improves the hit rate but consumes more memory. Although Qwen 3.8’s linear-attention layers reduce the state required by each sequence, every prefix cache entry still needs about 50 MiB to store the GatedDeltaNet state for all 24 layers (see Appendix E). I currently use a 512-token interval as a reasonable tradeoff, though this value still needs to be tuned using real workload data.
+The main design choice is the granularity at which prefixes are cached. Saving entries more frequently improves the hit rate but consumes more memory. Although Qwen 3.8’s linear-attention layers reduce the state required by each sequence, every prefix cache entry still needs about 50 MiB to store the GatedDeltaNet state for all 24 layers (see Appendix B). I currently use a 512-token interval as a reasonable tradeoff, though this value still needs to be tuned using real workload data.
 
 With the prefix cache in place, we can return to what happens when a request enters a slot. The engine hashes the request’s 512 token prefixes and performs a cache lookup. On a hit, it copies the cached GDN state into the slot’s buffer selected by `bank`, preventing that cache entry from being modified by this new sequence. The corresponding physical KV-cache bindings are then installed in the slot’s `bindings table`.
 
@@ -123,8 +123,8 @@ At this point, the packed `inputIds` and all the metadata needed to keep each Se
 <Sidenote>Most of the performance gains in my engine came from optimizing the quantized linear kernels, which dominate runtime on each forward pass, alongside a decode optimized FlashAttention 2 kernel and a chunked parallel scan that computes the GatedDeltaNet state in 32-token blocks for p.p sequences. *More on these kernel optimizations in a future blog*.</Sidenote>
 
 <figure>
-<img src="/blog/assets/images/pasted-image-20260910021531715.png" alt="image" width="469" />
-<figcaption>Qwen Architecture (Sebastian Raschka diagram)</figcaption>
+<img src="/blog/assets/images/pasted-image-20260911135514490.png" alt="image" />
+<figcaption>Qwen 3.8 Architecture (Sebastian Raschka diagram)</figcaption>
 </figure>
 
 Once the packed batch has run through these kernels, we have the target samples needed to verify the drafter proposals, along with the KV cache and GDN state computed for every Sequence in the batch.
@@ -168,7 +168,20 @@ At this point, one engine step is complete. The engine can accept new requests i
 
 
 ## Appendix A: Sparse Buffers
-## Appendix B: Speculative Decoding
-## Appendix C: Batched Attention
-## Appendix D: Linear Attention
-## Appendix E: Attention vs Linear Attention Cache
+
+There is a very good [blog post](https://trymirai.com/blog/sparse-buffers-for-kv-cache) explaining how sparse buffers work and why they are useful for KV caches. In short, sparse buffers allow us to reserve a large contiguous virtual address range for every slot in our engine, enough to hold the KV cache for `maxContext = 65k` tokens without committing that amount of physical memory upfront (like `llama.cpp` does).
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260911142238675.png" alt="image" />
+<figcaption>Cache Pool</figcaption>
+</figure>
+
+In my engine, the KV cache is managed in 128-token logical blocks. To simplify allocation and addressing, all cache tiles for one block across every layer and cache type (`Target K`, `Target V`, `DFlash K`, and `DFlash V`) are allocated as a single physical bundle. Each tile is a 256 KiB page holding 128 tokens for one `(cache, layer)` pair, so with DFlash enabled, a bundle contains 28 tiles and occupies 7 MiB. As with virtual memory in an operating system, these bundles do not need to follow the logical ordering in physical memory. Before each forward pass, we find which logical blocks the batch will touch and allocate any missing bundles from the shared placement heap pool (see the cache pool figure). Their tiles are then mapped into the corresponding sparse K/V buffers. Metal records these mappings in the GPU page tables, and the MMU handles the translation, keeping tokens contiguous within each virtual K/V layer region even when their physical backing is not.
+<figure>
+<img src="/blog/assets/images/pasted-image-20260911150221642.png" alt="image" />
+<figcaption>Virtual to Phyisical Mappings</figcaption>
+</figure>
+
+All slots allocate from the same physical pool. When a Sequence is destroyed, its mappings are removed and any unreferenced bundles return to the pool. When reusing a cached prefix, the same physical bundles can also be mapped into the virtual blocks of multiple slots. In addition, each bundle has a `ref_cnt`, similar to vLLM, which tracks how many mappings reference it and whether it can be evicted when memory is limited.
+
+## Appendix B: Attention vs Linear Attention Cache
