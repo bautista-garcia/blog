@@ -184,4 +184,20 @@ In my engine, the KV cache is managed in 128-token logical blocks. To simplify a
 
 All slots allocate from the same physical pool. When a Sequence is destroyed, its mappings are removed and any unreferenced bundles return to the pool. When reusing a cached prefix, the same physical bundles can also be mapped into the virtual blocks of multiple slots. In addition, each bundle has a `ref_cnt`, similar to vLLM, which tracks how many mappings reference it and whether it can be evicted when memory is limited.
 
-## Appendix B: Attention vs Linear Attention Cache
+## Appendix B: Standar Attention vs GDN State
+
+
+<figure>
+<img src="/blog/assets/images/pasted-image-20260911160405995.png" alt="image" />
+<figcaption>Standard Attention vs GDN State</figcaption>
+</figure>
+
+In standard causal attention, the query for “table” attends to the K and V projections of every token up to and including itself. Its own projections are then appended to the KV cache for subsequent tokens. The cache grows linearly with sequence length.
+
+GatedDeltaNet instead compresses the entire prefix "memory" into a fixed size recurrent matrix and a small convolution state (50 MiB for Qwen 3.5). Both are updated after every token, so the memory required to maintain one Sequence remains constant as its context grows. *This is the main advantage linear attention brings to the table.*
+
+This compression makes sharing prefixes more complicated. With a KV cache, the K/V projections are stored per token, so if two requests share the first $n$ tokens, we can reuse the cache up to that point. A GDN state represents one exact prefix and cannot be rolled back to an earlier one. Supporting $P$ prefix boundaries therefore means either storing $P$ full GDN state snapshots, which removes its memory advantage, or recomputing from an earlier checkpoint, which removes much of the speedup from prefix caching. *One final difference is that KV-cache reuse can point multiple Sequences to the same physical blocks because those blocks remain read-only. GDN state is overwritten as a Sequence advances, so each cached state needs dedicated prefix-cache memory and must be copied into the slot when reused.*
+
+The tradeoff I adopted for this engine is to cache prefixes at a much coarser granularity than other engines, using 512 token boundaries. This keeps prefix-cache memory usage manageable while still allowing hits on long shared prefixes, such as system prompts and tool definitions.
+
+
