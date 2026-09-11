@@ -708,7 +708,7 @@ main.wide {
 }
 
 body:not(.editor-body) .prose > figure {
-  width: min(54rem, calc(100vw - 2.5rem));
+  width: min(45rem, calc(100vw - 2.5rem));
 }
 
 .prose figure img,
