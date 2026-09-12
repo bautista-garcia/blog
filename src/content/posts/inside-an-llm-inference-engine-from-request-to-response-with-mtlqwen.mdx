@@ -16,7 +16,7 @@ A definition I use for inference engines is that they are the orchestration laye
 
 ## Why I built MTLQwen?
 
-MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 architectures<Sidenote>The engine was originally built for Qwen 3.5, but Qwen 3.8 has the exact same architecture, so it works natively with it.</Sidenote>, focusing on Metal backend for Apple GPUs. It started as a project to learn how inference engines work, but as I went deeper, I realized that specializing it for Qwen and Metal could provide more performance than general-purpose inference engines (vLLM or llama.cpp) on this specific model family and hardware. By using Metal specific features and optimizing Qwen’s kernels, MTLQwen ended up outperforming llama.cpp at both batch size 1 and in aggregate throughput, with a further 30% speedup when using DFlash.
+MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 architectures<Sidenote>The engine was originally built for Qwen 3.5, but Qwen 3.8 has the exact same architecture, so it works natively with it.</Sidenote>, focusing on Metal backend for Apple GPUs. It started as a project to learn how inference engines work, but as I went deeper, I realized that specializing it for Qwen and Metal could provide more performance than general purpose inference engines (vLLM or llama.cpp) on this specific model family and hardware. By using Metal specific features and optimizing Qwen’s kernels, MTLQwen ended up outperforming llama.cpp at both batch size 1 and in aggregate throughput, with a further 30% speedup when using DFlash.
 
 <figure>
 <video src="/blog/assets/videos/dflash-side-by-side-synced-styled-20s.mp4" controls playsinline preload="metadata" aria-label="dflash side by side synced styled 20s"></video>
@@ -82,12 +82,13 @@ If we processed each sequence one at a time, we would not get any benefit from s
 
 At this stage, every sequence has a `pending = len(request) - kv_valid` difference that depends on whether it had a prefix-cache hit. With some caveats (speculative decoding), this difference represents the number of tokens the sequence still needs to send through the model to compute their KV state.
 
-The engine has a fixed capacity for each model pass, which is 128 tokens in MTLQwen. A scheduling policy decides how to divide this capacity between sequences. Sequences with `pending = 1` are in the t.g stage and, with speculative decoding enabled, send `n_draft` tokens through the target model. Sequences with `pending > 1` are in the p.p stage, where the scheduler can adjust the size of each processed chunk. Prioritizing p.p favors TTFT, while prioritizing t.g improves throughput and ITL.
+The engine has a fixed capacity for each model pass, which is 128 tokens in MTLQwen. A scheduling policy decides how to divide this capacity between sequences. Sequences with `pending = 1` are in the t.g stage and, with speculative decoding enabled, send `n_draft` tokens through the target model. Sequences with `pending > 1` are in the p.p stage, where the scheduler can adjust the size of each processed chunk. Prioritizing p.p favors TTFT, while prioritizing t.g improves throughput and ITL.<Sidenote>More p.p capacity lets new requests finish their prompts and reach the first sampled token sooner. More t.g capacity advances live Sequences on each engine step, reducing the delay between tokens and increasing the rate at which output tokens are produced.</Sidenote>
 
 <figure>
 <img src="/blog/assets/images/pasted-image-20260909152811594.png" alt="image" />
 <figcaption>Batch creation</figcaption>
 </figure>
+<Sidenote>From this point on, all tokenization shown in the diagrams is illustrative and does not represent the exact output of Qwen’s tokenizer.</Sidenote>
 
 The scheduling policy I chose is simple: every live sequence advances on each step, which is possible because `max_slots * n_draft < 128`. Each t.g sequence (with spec decoding on) receives a `count` of `n_draft`, where `count` is the number of tokens it will compute. The remaining capacity is then divided equally between the p.p sequences. Each query also has a `state` property, which stores an offset into the candidates buffer. This buffer preserves the intermediate linear attention states produced while verifying proposed tokens (more on this later).
 
