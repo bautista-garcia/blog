@@ -19,8 +19,8 @@ A definition I use for inference engines is that they are the orchestration laye
 MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 architectures<Sidenote>The engine was originally built for Qwen 3.5, but Qwen 3.8 has the exact same architecture, so it works natively with it.</Sidenote>, focusing on Metal backend for Apple GPUs. It started as a project to learn how inference engines work, but as I went deeper, I realized that specializing it for Qwen and Metal could provide more performance than general-purpose inference engines (vLLM or llama.cpp) on this specific model family and hardware. By using Metal specific features and optimizing Qwen’s kernels, MTLQwen ended up outperforming llama.cpp at both batch size 1 and in aggregate throughput, with a further 30% speedup when using DFlash.
 
 <figure>
-<video src="/blog/assets/videos/dflash-side-by-side-synced.mp4" controls playsinline preload="metadata" aria-label="MTLQwen and llama.cpp generating the same response side by side" width="1920" height="1080"></video>
-<figcaption>MTLQwen with DFlash (left) generating the same response alongside llama.cpp (right).</figcaption>
+<video src="/blog/assets/videos/dflash-side-by-side-synced-styled-20s.mp4" controls playsinline preload="metadata" aria-label="dflash side by side synced styled 20s"></video>
+<figcaption>MTLQwen vs llama.cpp, both using DFLASH and same sampling configs</figcaption>
 </figure>
 
 
