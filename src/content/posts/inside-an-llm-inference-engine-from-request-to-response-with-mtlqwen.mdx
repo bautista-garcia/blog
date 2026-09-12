@@ -26,8 +26,15 @@ MTLQwen is an inference engine I built specifically for the Qwen 3.5 and 3.8 arc
 
 ## Following one batch through MTLQwen
 
-### Model load & Compilation
-*Here I could talk about the mmap, how it chooses the kernels each linear will run based on the shape and quant dtype of the weights and how it builds the RoPE tables.*
+### Model Load & Compilation
+
+Before getting into how the engine handles a request, we first have to initialize it. What does initialization mean here? There are three main steps: memory-mapping the model weights, selecting and compiling the kernels needed by each linear layer, and building metadata such as the RoPE tables.
+
+The weights are loaded through `mmap`, which maps the model file into the process address space and lets the operating system move its pages from SSD into RAM as they are accessed. This avoids loading the entire model at once and causing a large memory spike during initialization. Since we are running on a unified memory architecture, the GPU can then access these weights without requiring a separate copy in discrete GPU memory.
+
+Because the model is quantized, the kernel used by each linear layer depends on both the quantization type and the shape of its weights. <Sidenote>The quantization type determines how the weights are packed and dequantized, while the shape determines the tiling and dispatch configuration that works best with it (maximizing occupation).</Sidenote> Only the kernel variants required by the model are compiled into Metal pipeline states, which are later bound to command encoders <Sidenote>A `ComputeCommandEncoder` records which `PipelineState` (an executable kernel) to run, the resource bindings for the buffers it touches, and the dispatch dimensions. Encoders are stored inside a `CommandBuffer`, which I mostly treat as their submission wrapper, and that buffer is then committed to the GPU `CommandQueue`. Every GPU operation, including rendering and compute kernels, is ultimately submitted through this `CommandQueue`.</Sidenote> when the kernels are dispatched. Since the same variants are reused across the 32 decoder layers, each pipeline state is built once and then cached.
+
+Finally, we build the metadata needed by these kernels, including the RoPE tables. These tables contain the precomputed rotations for every supported token position, avoiding the need to recalculate the sine and cosine values during each forward pass.
 
 ### A Request Becomes a Sequence
 
@@ -167,6 +174,8 @@ At this point, one engine step is complete. The engine can accept new requests i
 - The engine currently supports Qwen 3.8 and 3.5, which share the same architecture. Supporting more models should be straightforward, with new kernels required only when an architecture introduces different operations, such as Kimi’s linear attention or DeepSeek’s MLA. Sliding-window attention is probably the next addition, since more models are adopting it.
 
 - I still need to tune the current 128-token block size. Smaller blocks waste less memory when partially filled but require more frequent allocations, while larger blocks reduce allocation overhead at the cost of more unused memory.
+
+- Currently the kernels and runtime (c++) of the models are compiled and built into an execution pipeline when the model is loaded. This could be precompiled and load a lib file (is this correct in metal??), however for my current development stage where I am constantly iterating the kernels, this JIT compilation is better.
 
 
 ## Appendix A: Sparse Buffers
