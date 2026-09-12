@@ -54,7 +54,7 @@ const onAboutPage = Astro.url.pathname.includes('/about');
     {socialImage && <meta name="twitter:image" content={socialImage} />}
     {socialImage && imageAlt && <meta name="twitter:image:alt" content={imageAlt} />}
   </head>
-  <body>
+  <body class={type === 'article' ? 'article-page' : undefined}>
     <a class="skip-link" href="#content">Skip to content</a>
     <header class="site-header">
       <nav aria-label="Primary navigation">

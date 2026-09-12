@@ -18,6 +18,9 @@ const { post } = Astro.props;
 const { Content, headings } = await render(post);
 const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 const socialImage = new URL(href(`og/${post.id}.png`), Astro.site).toString();
+const wordCount = post.body.match(/[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu)?.length ?? 0;
+const readingMinutes = Math.max(1, Math.ceil(wordCount / 220));
+const readingTime = `${readingMinutes} min read`;
 ---
 
 <Base
@@ -28,7 +31,23 @@ const socialImage = new URL(href(`og/${post.id}.png`), Astro.site).toString();
   imageAlt={`Social preview for “${post.data.title}”`}
   wide={toc.length > 0}
 >
-  <article class={toc.length > 0 ? 'post-layout' : undefined}>
+  <div class="reading-progress" data-reading-progress data-reading-minutes={readingMinutes}>
+    <div class="reading-progress-inner">
+      <span>{readingTime}</span>
+      <span data-reading-remaining>{readingMinutes} min left</span>
+      <div
+        class="reading-progress-track"
+        role="progressbar"
+        aria-label="Article reading progress"
+        aria-valuemin="0"
+        aria-valuemax="100"
+        aria-valuenow="0"
+      >
+        <span class="reading-progress-fill"></span>
+      </div>
+    </div>
+  </div>
+  <article class={toc.length > 0 ? 'post-layout' : undefined} data-reading-article>
     {
       toc.length > 0 && (
         <nav class="toc" aria-label="Table of contents">
@@ -59,4 +78,7 @@ const socialImage = new URL(href(`og/${post.id}.png`), Astro.site).toString();
       <Content />
     </div>
   </article>
+  <script>
+    import '../../lib/reading-progress.js';
+  </script>
 </Base>
