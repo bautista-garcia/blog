@@ -1,5 +1,6 @@
 ---
 title: LLAMA 1B   Optimizing Kernels
+description: Notes on optimizing kernels for Llama 1B
 date: 2026-04-07
 tags: [llama, kernels]
 draft: false
