@@ -175,8 +175,7 @@ At this point, one engine step is complete. The engine can accept new requests i
 
 - I still need to tune the current 128-token block size. Smaller blocks waste less memory when partially filled but require more frequent allocations, while larger blocks reduce allocation overhead at the cost of more unused memory.
 
-- Currently the kernels and runtime (c++) of the models are compiled and built into an execution pipeline when the model is loaded. This could be precompiled and load a lib file (is this correct in metal??), however for my current development stage where I am constantly iterating the kernels, this JIT compilation is better.
-
+- Currently, the C++ runtime compiles the Metal kernels and builds their pipeline states when the model is loaded. I could instead precompile the kernels into a `.metallib` and use a binary archive to reduce the remaining pipeline compilation at startup. However, at my current development stage, where I am constantly iterating on the kernels, runtime compilation is the best option.
 
 ## Appendix A: Sparse Buffers
 
