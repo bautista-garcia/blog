@@ -1,5 +1,6 @@
 ---
 title: From Standard Attention to Linear Attention Reducing memory footprint
+description: Notes on differences between Linear and Standard attention
 date: 2026-06-05
 tags: [attention, linear-attention, qwen]
 draft: false
